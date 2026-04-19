@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: clinical-db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: urgencias_g2
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/full_schema_v2.sql:/docker-entrypoint-initdb.d/init.sql
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clinical-backend
+    restart: always
+    environment:
+      - DATABASE_URL=postgresql://postgres:admin@db:5432/urgencias_g2
+      - SECRET_KEY=supersecretkey
+      - ENCRYPTION_KEY=T0ZfU2VjcmV0X0VuY3J5cHRpb25fS2V5X0Zvcl9QYXRpZW50X0RhdGE=
+      - MAIL_USERNAME=geral@sci.pt
+      - MAIL_PASSWORD=wynz qdap prjb gjnf
+      - MAIL_FROM=geral@sci.pt
+      - MAIL_SERVER=smtp.gmail.com
+      - MAIL_PORT=465
+      - MAIL_FROM_NAME="Portal Clínico G2"
+      - MAIL_STARTTLS=False
+      - MAIL_SSL_TLS=True
+      - USE_CREDENTIALS=True
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: clinical-frontend
+    restart: always
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
