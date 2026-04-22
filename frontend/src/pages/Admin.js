@@ -430,39 +430,59 @@ const Admin = () => {
                 </thead>
                 <tbody>
                   {utilizadores.filter(u => {
-                    const searchStr = filtros.user.toLowerCase();
+                    const searchStr = (filtros.user || '').toLowerCase();
+                    const nomeComp = (u.nome_completo || '').toLowerCase();
+                    const nomeUtil = (u.nome_utilizador || '').toLowerCase();
+                    const idUtil = String(u.id_utilizador || '');
+
                     const matchSearch = 
-                      u.id_utilizador.toString().includes(searchStr) ||
-                      u.nome_utilizador.toLowerCase().includes(searchStr) || 
-                      u.nome_completo.toLowerCase().includes(searchStr);
+                      idUtil.includes(searchStr) ||
+                      nomeUtil.includes(searchStr) || 
+                      nomeComp.includes(searchStr);
                     
                     const matchType = filtros.userType === '' || u.id_role === parseInt(filtros.userType);
                     
                     return matchSearch && matchType;
-                  }).map(u => (
-                    <tr key={u.id_utilizador}>
-                      <td>{u.id_utilizador}</td>
-                      <td>{u.nome_completo}</td>
-                      <td>{u.nome_utilizador}</td>
-                      <td>
-                        <span className="badge-role">
-                          {papeis.find(p => p.id_role === u.id_role)?.nome || 'N/A'}
-                        </span>
-                      </td>
-                      <td><span className={`status-pill ${u.ativo ? 'active' : 'inactive'}`}>{u.ativo ? 'Ativo' : 'Pendente'}</span></td>
-                      <td className="actions-cell">
-                        <button className="btn-icon" title="Editar" onClick={() => setEditingItem({type: 'user', data: {...u}})}><Edit2 size={16}/></button>
-                        <button 
-                          className={`btn-icon ${u.ativo ? 'btn-warn' : 'btn-ok'}`} 
-                          title={u.ativo ? "Desativar" : "Ativar"}
-                          onClick={() => toggleUserStatus(u.id_utilizador)}
-                        >
-                          <Activity size={16}/>
-                        </button>
-                        <button className="btn-icon btn-del" title="Eliminar" onClick={() => handleDelete('user', u.id_utilizador)}><Trash2 size={16}/></button>
+                  }).length > 0 ? (
+                    utilizadores.filter(u => {
+                      const searchStr = (filtros.user || '').toLowerCase();
+                      const matchSearch = 
+                        String(u.id_utilizador || '').includes(searchStr) ||
+                        (u.nome_utilizador || '').toLowerCase().includes(searchStr) || 
+                        (u.nome_completo || '').toLowerCase().includes(searchStr);
+                      const matchType = filtros.userType === '' || u.id_role === parseInt(filtros.userType);
+                      return matchSearch && matchType;
+                    }).map(u => (
+                      <tr key={u.id_utilizador}>
+                        <td>{u.id_utilizador}</td>
+                        <td>{u.nome_completo}</td>
+                        <td>{u.nome_utilizador}</td>
+                        <td>
+                          <span className="badge-role">
+                            {papeis.find(p => p.id_role === u.id_role)?.nome || 'N/A'}
+                          </span>
+                        </td>
+                        <td><span className={`status-pill ${u.ativo ? 'active' : 'inactive'}`}>{u.ativo ? 'Ativo' : 'Pendente'}</span></td>
+                        <td className="actions-cell">
+                          <button className="btn-icon" title="Editar" onClick={() => setEditingItem({type: 'user', data: {...u}})}><Edit2 size={16}/></button>
+                          <button 
+                            className={`btn-icon ${u.ativo ? 'btn-warn' : 'btn-ok'}`} 
+                            title={u.ativo ? "Desativar" : "Ativar"}
+                            onClick={() => toggleUserStatus(u.id_utilizador)}
+                          >
+                            <Activity size={16}/>
+                          </button>
+                          <button className="btn-icon btn-del" title="Eliminar" onClick={() => handleDelete('user', u.id_utilizador)}><Trash2 size={16}/></button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan="6" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>
+                        Nenhum utilizador encontrado.
                       </td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
             </div>

@@ -73,6 +73,10 @@ class LerUtilizador(BaseModel):
     num_func: Optional[int] = None
     ativo: bool
 
+    class Config:
+        from_attributes = True
+        orm_mode = True # Compatibilidade com Pydantic v1 e v2
+
 class CriarProfissional(BaseModel):
     num_func: int
     sexo: str
