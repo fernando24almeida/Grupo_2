@@ -8,6 +8,11 @@ export const ProvedorAutenticacao = ({ children }) => {
   const [token, setToken] = useState(localStorage.getItem('token'));
   const [hospital, setHospital] = useState(localStorage.getItem('hospital_selecionado'));
 
+  // Configuração imediata do axios para evitar race conditions no primeiro render
+  if (token && !axios.defaults.headers.common['Authorization']) {
+    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+  }
+
   useEffect(() => {
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
@@ -16,6 +21,7 @@ export const ProvedorAutenticacao = ({ children }) => {
       setUtilizador({ token, role: papel, hospital: hosp });
     } else {
       delete axios.defaults.headers.common['Authorization'];
+      setUtilizador(null);
     }
   }, [token]);
 

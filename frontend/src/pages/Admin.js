@@ -39,23 +39,42 @@ const Admin = () => {
   const [filtros, setFiltros] = useState({ user: '', userType: '', utente: '', episode: '', hospital: '' });
 
   const fetchData = async () => {
+    // Carregar papéis e hospitais primeiro pois são usados para lookup
     try {
-      const [resPapeis, resHospitais, resUsers, resUtentes, resEpisodios] = await Promise.all([
-        axios.get('/auth/roles'),
-        axios.get('/clinical/hospitals'),
-        axios.get('/auth/users'),
-        axios.get('/clinical/utentes'),
-        axios.get('/clinical/episodes')
-      ]);
-      console.log('DEBUG USERS:', resUsers.data); // Debugging
+      const resPapeis = await axios.get('/auth/roles');
       setPapeis(resPapeis.data);
+    } catch (err) { console.error('Erro ao carregar papéis', err); }
+
+    try {
+      const resHospitais = await axios.get('/clinical/hospitals');
       setHospitais(resHospitais.data);
-      setUtilizadores(resUsers.data);
-      setUtentes(resUtentes.data);
-      setEpisodios(resEpisodios.data);
-    } catch (erro) {
-      console.error('Erro ao carregar dados', erro);
+    } catch (err) { console.error('Erro ao carregar hospitais', err); }
+
+    // Carregar utilizadores
+    try {
+      const resUsers = await axios.get('/auth/users');
+      setUtilizadores(resUsers.data || []);
+      console.log('Utilizadores carregados:', resUsers.data?.length);
+    } catch (err) { 
+      console.error('Erro ao carregar utilizadores:', err.response?.status, err.response?.data);
+      setUtilizadores([]); // Garantir que fica vazio em caso de erro
     }
+
+    // Carregar utentes
+    try {
+      const resUtentes = await axios.get('/clinical/utentes');
+      setUtentes(resUtentes.data || []);
+      console.log('Utentes carregados:', resUtentes.data?.length);
+    } catch (err) { 
+      console.error('Erro ao carregar utentes:', err); 
+      setUtentes([]);
+    }
+
+    // Carregar episódios
+    try {
+      const resEpisodios = await axios.get('/clinical/episodes');
+      setEpisodios(resEpisodios.data || []);
+    } catch (err) { console.error('Erro ao carregar episódios', err); }
   };
 
   useEffect(() => {
