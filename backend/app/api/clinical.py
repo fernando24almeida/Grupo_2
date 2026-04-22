@@ -248,6 +248,25 @@ def obter_equipa_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)
         
     return equipa
 
+@router.get("/episodes/awaiting-triage", response_model=List[EpisodioUrgencia])
+def ler_episodios_aguardando_triagem(
+    id_hospital: Optional[str] = None, 
+    sessao: Session = Depends(obter_sessao)
+):
+    # Selecionar episódios que não têm triagem e não têm data de saída
+    query = select(EpisodioUrgencia).where(
+        EpisodioUrgencia.data_h_saida == None,
+        ~EpisodioUrgencia.cod_epis.in_(select(Triagem.cod_epis))
+    )
+    
+    if id_hospital:
+        query = query.where(EpisodioUrgencia.id_hospital == id_hospital)
+    
+    # Ordem de chegada (mais antigos primeiro)
+    query = query.order_by(EpisodioUrgencia.data_h_entrada.asc())
+    
+    return sessao.exec(query).all()
+
 # TRIAGEM
 @router.post("/triagens", response_model=Triagem)
 def criar_triagem(triagem: Triagem, sessao: Session = Depends(obter_sessao)):

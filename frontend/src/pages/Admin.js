@@ -36,7 +36,7 @@ const Admin = () => {
   const [mensagem, setMensagem] = useState({ tipo: '', texto: '' });
 
   // Filtros
-  const [filtros, setFiltros] = useState({ user: '', utente: '', episode: '', hospital: '' });
+  const [filtros, setFiltros] = useState({ user: '', userType: '', utente: '', episode: '', hospital: '' });
 
   const fetchData = async () => {
     try {
@@ -47,6 +47,7 @@ const Admin = () => {
         axios.get('/clinical/utentes'),
         axios.get('/clinical/episodes')
       ]);
+      console.log('DEBUG USERS:', resUsers.data); // Debugging
       setPapeis(resPapeis.data);
       setHospitais(resHospitais.data);
       setUtilizadores(resUsers.data);
@@ -375,25 +376,71 @@ const Admin = () => {
             <div className="table-controls">
               <div className="search-box">
                 <Search size={18} />
-                <input type="text" placeholder="Pesquisar login ou nome..." value={filtros.user} onChange={e => setFiltros({...filtros, user: e.target.value})} />
+                <input 
+                  type="text" 
+                  placeholder="Pesquisar por ID, Nome ou Login..." 
+                  value={filtros.user} 
+                  onChange={e => setFiltros({...filtros, user: e.target.value})} 
+                />
+              </div>
+              <div className="filter-box">
+                <select 
+                  value={filtros.userType} 
+                  onChange={e => setFiltros({...filtros, userType: e.target.value})}
+                  className="tab-btn"
+                  style={{ height: 'auto', padding: '8px 15px' }}
+                >
+                  <option value="">Todos os Tipos</option>
+                  {papeis.map(p => (
+                    <option key={p.id_role} value={p.id_role}>{p.nome}</option>
+                  ))}
+                </select>
               </div>
             </div>
             <div className="table-container">
               <table>
                 <thead>
-                  <tr><th>Nome Completo</th><th>Login</th><th>Papel</th><th>Estado</th><th>Ações</th></tr>
+                  <tr>
+                    <th>ID</th>
+                    <th>Nome Completo</th>
+                    <th>Login</th>
+                    <th>Papel</th>
+                    <th>Estado</th>
+                    <th>Ações</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {utilizadores.filter(u => u.nome_utilizador.toLowerCase().includes(filtros.user.toLowerCase()) || u.nome_completo.toLowerCase().includes(filtros.user.toLowerCase())).map(u => (
+                  {utilizadores.filter(u => {
+                    const searchStr = filtros.user.toLowerCase();
+                    const matchSearch = 
+                      u.id_utilizador.toString().includes(searchStr) ||
+                      u.nome_utilizador.toLowerCase().includes(searchStr) || 
+                      u.nome_completo.toLowerCase().includes(searchStr);
+                    
+                    const matchType = filtros.userType === '' || u.id_role === parseInt(filtros.userType);
+                    
+                    return matchSearch && matchType;
+                  }).map(u => (
                     <tr key={u.id_utilizador}>
+                      <td>{u.id_utilizador}</td>
                       <td>{u.nome_completo}</td>
                       <td>{u.nome_utilizador}</td>
-                      <td>{papeis.find(p => p.id_role === u.id_role)?.nome}</td>
+                      <td>
+                        <span className="badge-role">
+                          {papeis.find(p => p.id_role === u.id_role)?.nome || 'N/A'}
+                        </span>
+                      </td>
                       <td><span className={`status-pill ${u.ativo ? 'active' : 'inactive'}`}>{u.ativo ? 'Ativo' : 'Pendente'}</span></td>
                       <td className="actions-cell">
-                        <button className="btn-icon" onClick={() => setEditingItem({type: 'user', data: {...u}})}><Edit2 size={16}/></button>
-                        <button className={`btn-icon ${u.ativo ? 'btn-warn' : 'btn-ok'}`} onClick={() => toggleUserStatus(u.id_utilizador)}><Activity size={16}/></button>
-                        <button className="btn-icon btn-del" onClick={() => handleDelete('user', u.id_utilizador)}><Trash2 size={16}/></button>
+                        <button className="btn-icon" title="Editar" onClick={() => setEditingItem({type: 'user', data: {...u}})}><Edit2 size={16}/></button>
+                        <button 
+                          className={`btn-icon ${u.ativo ? 'btn-warn' : 'btn-ok'}`} 
+                          title={u.ativo ? "Desativar" : "Ativar"}
+                          onClick={() => toggleUserStatus(u.id_utilizador)}
+                        >
+                          <Activity size={16}/>
+                        </button>
+                        <button className="btn-icon btn-del" title="Eliminar" onClick={() => handleDelete('user', u.id_utilizador)}><Trash2 size={16}/></button>
                       </td>
                     </tr>
                   ))}
@@ -402,8 +449,151 @@ const Admin = () => {
             </div>
           </section>
         )}
-        
-        {/* Outras listagens mantêm-se funcionais... */}
+
+        {/* LISTAGEM DE UTENTES */}
+        {activeTab === 'utentes' && (
+          <section className="card">
+            <div className="table-controls">
+              <div className="search-box">
+                <Search size={18} />
+                <input 
+                  type="text" 
+                  placeholder="Pesquisar por nome, Nº utente ou telemóvel..." 
+                  value={filtros.utente} 
+                  onChange={e => setFiltros({...filtros, utente: e.target.value})} 
+                />
+              </div>
+            </div>
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Nº Utente</th>
+                    <th>Nome</th>
+                    <th>Telemóvel</th>
+                    <th>Localidade</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {utentes.filter(u => {
+                    const searchStr = filtros.utente.toLowerCase();
+                    const numUtenteStr = String(u.num_utente);
+                    return u.nome.toLowerCase().includes(searchStr) || 
+                           numUtenteStr.includes(searchStr) ||
+                           (u.telemovel && u.telemovel.includes(searchStr));
+                  }).map(u => (
+                    <tr key={u.num_utente}>
+                      <td>{u.num_utente}</td>
+                      <td>{u.nome}</td>
+                      <td>{u.telemovel || 'N/A'}</td>
+                      <td>{u.localidade || 'N/A'}</td>
+                      <td className="actions-cell">
+                        <button className="btn-icon" onClick={() => setEditingItem({type: 'utente', data: {...u}})}><Edit2 size={16}/></button>
+                        <button className="btn-icon btn-del" onClick={() => handleDelete('utente', u.num_utente)}><Trash2 size={16}/></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* LISTAGEM DE EPISÓDIOS */}
+        {activeTab === 'episodes' && (
+          <section className="card">
+            <div className="table-controls">
+              <div className="search-box">
+                <Search size={18} />
+                <input 
+                  type="text" 
+                  placeholder="Pesquisar por Código, ID Utente ou Sintomas..." 
+                  value={filtros.episode} 
+                  onChange={e => setFiltros({...filtros, episode: e.target.value})} 
+                />
+              </div>
+            </div>
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Código</th>
+                    <th>ID Utente</th>
+                    <th>Entrada</th>
+                    <th>Estado</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {episodios.filter(e => 
+                    e.cod_epis.toLowerCase().includes(filtros.episode.toLowerCase()) || 
+                    e.id_utente.toString().includes(filtros.episode) ||
+                    (e.sintomas && e.sintomas.toLowerCase().includes(filtros.episode.toLowerCase()))
+                  ).map(e => (
+                    <tr key={e.cod_epis}>
+                      <td>{e.cod_epis}</td>
+                      <td>{e.id_utente}</td>
+                      <td>{new Date(e.data_h_entrada).toLocaleString()}</td>
+                      <td>
+                        <span className={`status-pill ${e.data_h_saida ? 'inactive' : 'active'}`}>
+                          {e.data_h_saida ? 'Encerrado' : 'Em Aberto'}
+                        </span>
+                      </td>
+                      <td className="actions-cell">
+                        <button className="btn-icon" onClick={() => setEditingItem({type: 'episode', data: {...e}})}><Edit2 size={16}/></button>
+                        <button className="btn-icon btn-del" onClick={() => handleDelete('episode', e.cod_epis)}><Trash2 size={16}/></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {/* LISTAGEM DE HOSPITAIS */}
+        {activeTab === 'hospitals' && (
+          <section className="card">
+            <div className="table-controls">
+              <div className="search-box">
+                <Search size={18} />
+                <input 
+                  type="text" 
+                  placeholder="Pesquisar hospital..." 
+                  value={filtros.hospital} 
+                  onChange={e => setFiltros({...filtros, hospital: e.target.value})} 
+                />
+              </div>
+            </div>
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Nome</th>
+                    <th>Localidade</th>
+                    <th>Ações</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hospitais.filter(h => 
+                    h.nome_hosp.toLowerCase().includes(filtros.hospital.toLowerCase()) || 
+                    h.local_hosp.toLowerCase().includes(filtros.hospital.toLowerCase())
+                  ).map(h => (
+                    <tr key={h.nome_hosp}>
+                      <td>{h.nome_hosp}</td>
+                      <td>{h.local_hosp}</td>
+                      <td className="actions-cell">
+                        <button className="btn-icon" onClick={() => setEditingItem({type: 'hospital', data: {...h}})}><Edit2 size={16}/></button>
+                        <button className="btn-icon btn-del" onClick={() => handleDelete('hospital', h.nome_hosp)}><Trash2 size={16}/></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
       </div>
 
       <style jsx>{`
