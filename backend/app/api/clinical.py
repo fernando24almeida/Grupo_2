@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlmodel import Session, select, func, union_all
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta, date
 from ..core.db import obter_sessao
 from ..models.models import Utente, EpisodioUrgencia, Triagem, Ato, Prescricao, Internamento, Hospital, Envolve, FuncionarioHospital
 from ..core.security import RoleChecker
@@ -17,6 +17,14 @@ class CriarEpisodio(BaseModel):
     data_h_entrada: Optional[datetime] = None
     sintomas: Optional[str] = None
     observacoes: Optional[str] = None
+
+class CriarTriagem(BaseModel):
+    cod_epis: str
+    tensao_arterial: str
+    temperatura: float
+    sintomas: str
+    observacoes: Optional[str] = None
+    num_func_enfermeiro: int
 
 class AtualizarUtente(BaseModel):
     nome: Optional[str] = None
@@ -98,12 +106,128 @@ def pesquisar_utente(
     resultados = sessao.exec(query).all()
     return resultados
 
+import random
+import string
+from ..core.security import obter_hash_palavra_passe, verificar_palavra_passe, criar_token_acesso
+from ..core.email import enviar_email_ativacao
+from ..models.models import EmailValidation
+
+# SCHEMAS ADICIONAIS
+class UtenteCreate(BaseModel):
+    num_utente: int
+    nome: str
+    email: str
+    telemovel: Optional[str] = None
+    morada: Optional[str] = None
+    localidade: Optional[str] = None
+    sexo: Optional[str] = "M"
+    data_nascimento: Optional[str] = None # Aceita string do frontend (YYYY-MM-DD)
+
+class LoginUtente(BaseModel):
+    num_utente: int
+    pin: str
+
+class AlterarPinUtente(BaseModel):
+    num_utente: int
+    pin_atual: str
+    novo_pin: str
+
 @router.post("/utentes", response_model=Utente)
-def criar_utente(utente: Utente, sessao: Session = Depends(obter_sessao)):
+def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
+    # 1. Verificar se o utente já existe pelo número
+    existente_num = sessao.get(Utente, dados.num_utente)
+    if existente_num:
+        raise HTTPException(status_code=400, detail=f"O número de utente {dados.num_utente} já está registado.")
+    
+    # 2. Verificar se o e-mail já existe
+    existente_email = sessao.exec(select(Utente).where(Utente.email == dados.email.lower().strip())).first()
+    if existente_email:
+        raise HTTPException(status_code=400, detail=f"O e-mail {dados.email} já está associado a outro utente.")
+
+    # 3. Tratar data de nascimento (converter string vazia para None)
+    data_nasc = None
+    if dados.data_nascimento and dados.data_nascimento.strip():
+        try:
+            if isinstance(dados.data_nascimento, str):
+                data_nasc = datetime.strptime(dados.data_nascimento, "%Y-%m-%d").date()
+            else:
+                data_nasc = dados.data_nascimento
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Formato de data de nascimento inválido. Use AAAA-MM-DD.")
+    
+    # 4. Gerar PIN temporário
+    pin_temporario = ''.join(random.choices(string.digits, k=6))
+    
+    # 5. Criar objeto Utente
+    novo_utente = Utente(
+        num_utente=dados.num_utente,
+        nome=dados.nome,
+        email=dados.email.lower().strip(),
+        telemovel=dados.telemovel or None,
+        morada=dados.morada or None,
+        localidade=dados.localidade or None,
+        sexo=dados.sexo or "M",
+        data_nascimento=data_nasc,
+        password_hash=obter_hash_palavra_passe(pin_temporario),
+        ativo=False,
+        primeiro_acesso=True
+    )
+    
+    # 6. Gerar código de ativação
+    codigo_ativacao = f"{random.randint(100000, 999999)}"
+    
+    try:
+        sessao.add(novo_utente)
+        validacao = EmailValidation(
+            email=novo_utente.email, 
+            codigo=codigo_ativacao, 
+            expira_em=datetime.now() + timedelta(hours=24)
+        )
+        sessao.add(validacao)
+        sessao.commit()
+        
+        # 7. Enviar e-mail
+        background_tasks.add_task(enviar_email_ativacao, novo_utente.email, novo_utente.nome, f"{codigo_ativacao} (PIN Mobile: {pin_temporario})")
+        
+        print(f"\n📧 [DEBUG MOBILE] Utente {novo_utente.num_utente} | PIN: {pin_temporario} | Código: {codigo_ativacao}\n")
+        
+        sessao.refresh(novo_utente)
+        return novo_utente
+    except Exception as e:
+        sessao.rollback()
+        print(f"ERRO CRÍTICO AO CRIAR UTENTE: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro interno na base de dados: {str(e)}")
+
+@router.post("/utentes/login")
+def login_utente(dados: LoginUtente, sessao: Session = Depends(obter_sessao)):
+    utente = sessao.get(Utente, dados.num_utente)
+    if not utente or not verificar_palavra_passe(dados.pin, utente.password_hash):
+        raise HTTPException(status_code=401, detail="Número de utente ou PIN incorretos")
+    
+    if not utente.ativo:
+        raise HTTPException(status_code=403, detail="Conta não ativada. Verifique o seu e-mail.")
+    
+    token = criar_token_acesso(dados={"sub": str(utente.num_utente), "role": "UTENTE"})
+    
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "primeiro_acesso": utente.primeiro_acesso,
+        "nome": utente.nome
+    }
+
+@router.post("/utentes/change-pin")
+def alterar_pin_utente(dados: AlterarPinUtente, sessao: Session = Depends(obter_sessao)):
+    utente = sessao.get(Utente, dados.num_utente)
+    if not utente or not verificar_palavra_passe(dados.pin_atual, utente.password_hash):
+        raise HTTPException(status_code=401, detail="PIN atual incorreto")
+    
+    utente.password_hash = obter_hash_palavra_passe(dados.novo_pin)
+    utente.primeiro_acesso = False
     sessao.add(utente)
     sessao.commit()
-    sessao.refresh(utente)
-    return utente
+    
+    return {"message": "PIN alterado com sucesso. Já pode aceder à App."}
 
 @router.get("/utentes", response_model=List[Utente])
 def ler_utentes(sessao: Session = Depends(obter_sessao)):
@@ -274,6 +398,130 @@ def criar_triagem(triagem: Triagem, sessao: Session = Depends(obter_sessao)):
     sessao.commit()
     sessao.refresh(triagem)
     return triagem
+
+@router.get("/episodes/{cod_epis}")
+def obter_episodio_detalhado(cod_epis: str, sessao: Session = Depends(obter_sessao)):
+    episodio = sessao.get(EpisodioUrgencia, cod_epis)
+    if not episodio:
+        raise HTTPException(status_code=404, detail="Episódio não encontrado")
+    utente = sessao.get(Utente, episodio.id_utente)
+    # Procurar a triagem deste episódio
+    triagem = sessao.exec(select(Triagem).where(Triagem.cod_epis == cod_epis)).first()
+    
+    return {
+        "cod_epis": episodio.cod_epis,
+        "data_h_entrada": episodio.data_h_entrada,
+        "id_utente": episodio.id_utente,
+        "id_hospital": episodio.id_hospital,
+        "sintomas_iniciais": episodio.sintomas,
+        "utente": utente,
+        "triagem": triagem
+    }
+
+@router.get("/episodes/awaiting-doctor", response_model=List[dict])
+def ler_episodios_aguardando_medico(
+    id_hospital: Optional[str] = None, 
+    sessao: Session = Depends(obter_sessao)
+):
+    # Selecionar episódios que TÊM triagem e NÃO têm data de saída
+    query = select(EpisodioUrgencia, Triagem, Utente).join(
+        Triagem, EpisodioUrgencia.cod_epis == Triagem.cod_epis
+    ).join(
+        Utente, EpisodioUrgencia.id_utente == Utente.num_utente
+    ).where(
+        EpisodioUrgencia.data_h_saida == None
+    )
+    
+    if id_hospital:
+        query = query.where(EpisodioUrgencia.id_hospital == id_hospital)
+    
+    # Ordenar por prioridade (Simulação simplificada Manchester) e depois por tempo
+    resultados = sessao.exec(query).all()
+    
+    # Transformar em lista de dicts para facilitar o frontend
+    fila = []
+    for ep, tri, ut in resultados:
+        fila.append({
+            "cod_epis": ep.cod_epis,
+            "data_h_entrada": ep.data_h_entrada,
+            "utente_nome": ut.nome,
+            "prioridade": tri.prioridade,
+            "sintomas": tri.sintomas
+        })
+    
+    # Ordenação lógica: Vermelho > Laranja > Amarelo > Verde > Azul
+    ordem = {"VERMELHO": 0, "LARANJA": 1, "AMARELO": 2, "VERDE": 3, "AZUL": 4}
+    fila.sort(key=lambda x: (ordem.get(x["prioridade"], 9), x["data_h_entrada"]))
+    
+    return fila
+
+@router.post("/triagens/manchester", response_model=Triagem)
+def registar_triagem_manchester(dados: CriarTriagem, sessao: Session = Depends(obter_sessao)):
+    # 1. Validar episódio
+    episodio = sessao.get(EpisodioUrgencia, dados.cod_epis)
+    if not episodio:
+        raise HTTPException(status_code=404, detail="Episódio não encontrado")
+    
+    # 2. Lógica de Manchester (Prioridade baseada em sinais vitais)
+    prioridade = "AZUL" 
+    temp = dados.temperatura
+    
+    try:
+        sistolica = int(dados.tensao_arterial.split('/')[0])
+    except:
+        sistolica = 120
+
+    if temp >= 40 or sistolica < 70:
+        prioridade = "VERMELHO"
+    elif temp >= 39 or sistolica > 190 or sistolica < 90:
+        prioridade = "LARANJA"
+    elif temp >= 38 or sistolica > 160:
+        prioridade = "AMARELO"
+    elif temp >= 37.5:
+        prioridade = "VERDE"
+    
+    db_triagem = Triagem(
+        cod_epis=dados.cod_epis,
+        prioridade=prioridade,
+        tensao_arterial=dados.tensao_arterial,
+        temperatura=dados.temperatura,
+        sintomas=dados.sintomas,
+        observacoes=dados.observacoes,
+        num_func_enfermeiro=dados.num_func_enfermeiro,
+        data_h_triagem=datetime.now()
+    )
+    
+    sessao.add(db_triagem)
+    sessao.commit()
+    sessao.refresh(db_triagem)
+    return db_triagem
+
+@router.get("/utentes/{num_utente}/history")
+def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sessao)):
+    # 1. Obter todos os episódios do utente
+    episodios = sessao.exec(
+        select(EpisodioUrgencia).where(EpisodioUrgencia.id_utente == num_utente).order_by(EpisodioUrgencia.data_h_entrada.desc())
+    ).all()
+    
+    historico = []
+    for ep in episodios:
+        # Para cada episódio, buscar a triagem e atos
+        triagem = sessao.exec(select(Triagem).where(Triagem.cod_epis == ep.cod_epis)).first()
+        atos = sessao.exec(select(Ato).where(Ato.cod_epis == ep.cod_epis)).all()
+        prescricoes = sessao.exec(select(Prescricao).where(Prescricao.cod_epis == ep.cod_epis)).all()
+        
+        historico.append({
+            "episodio": ep,
+            "triagem": triagem,
+            "atos": atos,
+            "prescricoes": prescricoes
+        })
+    
+    return historico
+
+@router.get("/episodes/{cod_epis}/prescriptions", response_model=List[Prescricao])
+def listar_prescricoes_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
+    return sessao.exec(select(Prescricao).where(Prescricao.cod_epis == cod_epis)).all()
 
 # ATOS
 @router.post("/atos", response_model=Ato)

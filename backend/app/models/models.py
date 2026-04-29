@@ -13,6 +13,7 @@ class Utilizador(SQLModel, table=True):
     nome_utilizador: str = Field(sa_column=Column("username", String, unique=True, index=True))
     nome_completo: str
     email: str = Field(unique=True, index=True)
+    telemovel: Optional[str] = None
     hash_palavra_passe: str = Field(sa_column=Column("password_hash", String))
     mfa_secret: Optional[str] = None
     mfa_ativo: bool = Field(default=False)
@@ -54,11 +55,15 @@ class Hospital(SQLModel, table=True):
 class Utente(SQLModel, table=True):
     num_utente: int = Field(primary_key=True)
     nome: str = Field(index=True)
+    email: str = Field(unique=True, index=True)
     telemovel: Optional[str] = Field(default=None, index=True)
     morada: Optional[str] = None
     sexo: Optional[str] = None
     localidade: Optional[str] = None
     data_nascimento: Optional[date] = Field(sa_column=Column("data_nasc", Date, nullable=True))
+    password_hash: Optional[str] = None
+    ativo: bool = Field(default=False)
+    primeiro_acesso: bool = Field(default=True)
 
 class FuncionarioHospital(SQLModel, table=True):
     __tablename__ = "funcionario_hospital"
@@ -87,6 +92,8 @@ class Triagem(SQLModel, table=True):
     num_triagem: Optional[int] = Field(default=None, primary_key=True)
     cod_epis: str = Field(foreign_key="episodio_urgencia.cod_epis")
     prioridade: Optional[str] = None
+    tensao_arterial: Optional[str] = None
+    temperatura: Optional[float] = None
     sintomas: Optional[str] = None
     observacoes: Optional[str] = None
     data_h_triagem: datetime = Field(sa_column=Column("data_h_triage", DateTime, default=datetime.now))

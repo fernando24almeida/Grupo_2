@@ -26,6 +26,11 @@ def criar_token_acesso(dados: dict, expira_delta: timedelta = None):
     return jwt_codificado
 
 def obter_utilizador_atual(token: str = Depends(oauth2_scheme)):
+    # Importação local para evitar erro circular (Circular Import)
+    from .db import obter_sessao
+    from ..models.models import Utilizador
+    from sqlmodel import Session, select
+
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Não foi possível validar as credenciais",
@@ -34,10 +39,19 @@ def obter_utilizador_atual(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, configuracoes.SECRET_KEY, algorithms=[configuracoes.ALGORITHM])
         username: str = payload.get("sub")
-        role: str = payload.get("role")
         if username is None:
             raise credentials_exception
-        return {"username": username, "role": role}
+        
+        # Obter sessão manualmente dentro da função
+        from .db import motor
+        with Session(motor) as sessao:
+            utilizador = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == username)).first()
+            if not utilizador:
+                raise credentials_exception
+            
+            # Detach do objeto para poder ser usado fora da sessão
+            sessao.expunge(utilizador)
+            return utilizador
     except JWTError:
         raise credentials_exception
 
@@ -45,8 +59,16 @@ class RoleChecker:
     def __init__(self, allowed_roles: list):
         self.allowed_roles = allowed_roles
 
-    def __call__(self, user: dict = Depends(obter_utilizador_atual)):
-        if user["role"] not in self.allowed_roles:
+    def __call__(self, user: Utilizador = Depends(obter_utilizador_atual)):
+        # Verificar o papel do utilizador através da tabela de papéis ou ID
+        # No seu sistema, o papel está no ID_ROLE. Vamos obter o nome.
+        from ..models.models import PapelUtilizador
+        from .db import motor
+        with Session(motor) as sessao:
+            papel = sessao.get(PapelUtilizador, user.id_role)
+            nome_papel = papel.nome if papel else "USER"
+            
+        if nome_papel not in self.allowed_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Você não tem permissão para aceder a este recurso"

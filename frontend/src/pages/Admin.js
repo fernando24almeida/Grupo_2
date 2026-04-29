@@ -17,6 +17,7 @@ const Admin = () => {
   const [nomeUtilizador, setNomeUtilizador] = useState('');
   const [nomeCompleto, setNomeCompleto] = useState('');
   const [email, setEmail] = useState('');
+  const [telemovel, setTelemovel] = useState('');
   const [palavraPasse, setPalavraPasse] = useState('');
   const [idRole, setIdRole] = useState('');
   const [numFunc, setNumFunc] = useState('');
@@ -29,6 +30,16 @@ const Admin = () => {
   const [profSexo, setProfSexo] = useState('M');
   const [profTipo, setProfTipo] = useState('MEDICO');
   const [profEstagiario, setProfEstagiario] = useState('NÃO');
+  
+  // Estados para Registro de Utente (App Mobile)
+  const [uNome, setUNome] = useState('');
+  const [uEmail, setUEmail] = useState('');
+  const [uNum, setUNum] = useState('');
+  const [uTel, setUTel] = useState('');
+  const [uMorada, setUMorada] = useState('');
+  const [uLocalidade, setULocalidade] = useState('');
+  const [uSexo, setUSexo] = useState('M');
+  const [uDataNasc, setUDataNasc] = useState('');
   
   // Estados para Edição
   const [editingItem, setEditingItem] = useState(null);
@@ -151,6 +162,28 @@ const Admin = () => {
     }
   };
 
+  const criarUtenteApp = async (e) => {
+    e.preventDefault();
+    try {
+      await axios.post('/clinical/utentes', {
+        num_utente: parseInt(uNum),
+        nome: uNome,
+        email: uEmail,
+        telemovel: uTel,
+        morada: uMorada,
+        localidade: uLocalidade,
+        sexo: uSexo,
+        data_nascimento: uDataNasc
+      });
+      setMensagem({ tipo: 'success', texto: `Utente ${uNome} registado! PIN e código enviados para ${uEmail}.` });
+      setUNome(''); setUEmail(''); setUNum(''); setUTel('');
+      setUMorada(''); setULocalidade(''); setUSexo('M'); setUDataNasc('');
+      fetchData();
+    } catch (erro) {
+      setMensagem({ tipo: 'error', texto: erro.response?.data?.detail || 'Erro ao registar utente para a App.' });
+    }
+  };
+
   const handleUpdate = async (e) => {
     e.preventDefault();
     const { type, data } = editingItem;
@@ -220,6 +253,20 @@ const Admin = () => {
           <button className={`tab-btn ${activeTab === 'hospitals' ? 'active' : ''}`} onClick={() => setActiveTab('hospitals')}>Hospitais</button>
         </div>
       </header>
+
+      <div className="hospital-selection-bar">
+        <div className="selection-inner">
+          <span className="selection-label">Gestão Hospitalar:</span>
+          <select 
+            className="form-select" 
+            value={filtros.hospital}
+            onChange={(e) => setFiltros({...filtros, hospital: e.target.value})}
+          >
+            <option value="">Visão Global (Todos os Hospitais)</option>
+            {hospitais.map(h => <option key={h.nome_hosp} value={h.nome_hosp}>{h.nome_hosp}</option>)}
+          </select>
+        </div>
+      </div>
       
       {mensagem.texto && (
         <div className={`alert alert-${mensagem.tipo}`}>
@@ -239,28 +286,102 @@ const Admin = () => {
             <form onSubmit={handleUpdate} className="admin-form">
               {editingItem.type === 'user' && (
                 <>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>ID (Chave):</label>
+                      <input type="text" value={editingItem.data.id_utilizador} readOnly style={{ background: '#f5f5f5' }} />
+                    </div>
+                    <div className="form-group">
+                      <label>Login (Username):</label>
+                      <input type="text" value={editingItem.data.nome_utilizador} readOnly style={{ background: '#f5f5f5' }} />
+                    </div>
+                  </div>
                   <div className="form-group">
                     <label>Nome Completo:</label>
                     <input type="text" value={editingItem.data.nome_completo} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, nome_completo: e.target.value}})} />
                   </div>
-                  <div className="form-group">
-                    <label>E-mail:</label>
-                    <input type="email" value={editingItem.data.email} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, email: e.target.value}})} />
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>E-mail:</label>
+                      <input type="email" value={editingItem.data.email} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, email: e.target.value}})} />
+                    </div>
+                    <div className="form-group">
+                      <label>Telemóvel:</label>
+                      <input type="text" value={editingItem.data.telemovel || ''} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, telemovel: e.target.value}})} placeholder="Opcional" />
+                    </div>
                   </div>
-                  <div className="form-group">
-                    <label>Novo Login:</label>
-                    <input type="text" value={editingItem.data.nome_utilizador} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, nome_utilizador: e.target.value}})} />
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Papel (Cargo):</label>
+                      <select value={editingItem.data.id_role} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, id_role: parseInt(e.target.value)}})}>
+                        {papeis.map(p => <option key={p.id_role} value={p.id_role}>{p.nome}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Nova Password:</label>
+                      <input type="password" placeholder="Deixe vazio para manter" onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, palavra_passe: e.target.value}})} />
+                    </div>
                   </div>
-                  <div className="form-group">
-                    <label>Papel:</label>
-                    <select value={editingItem.data.id_role} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, id_role: parseInt(e.target.value)}})}>
-                      {papeis.map(p => <option key={p.id_role} value={p.id_role}>{p.nome}</option>)}
-                    </select>
+                  <div className="form-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '10px' }}>
+                    <input type="checkbox" checked={editingItem.data.ativo} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, ativo: e.target.checked}})} />
+                    <label style={{ margin: 0 }}>Conta Ativa / Validada</label>
                   </div>
                 </>
               )}
-              {/* Outros campos de edição mantêm-se... */}
-              <div className="form-actions">
+              {editingItem.type === 'utente' && (
+                <>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Nº Utente:</label>
+                      <input type="text" value={editingItem.data.num_utente} readOnly style={{ background: '#f5f5f5' }} />
+                    </div>
+                    <div className="form-group">
+                      <label>Nome Completo:</label>
+                      <input type="text" value={editingItem.data.nome} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, nome: e.target.value}})} />
+                    </div>
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>E-mail (App Mobile):</label>
+                      <input type="email" value={editingItem.data.email || ''} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, email: e.target.value}})} />
+                    </div>
+                    <div className="form-group">
+                      <label>Telemóvel:</label>
+                      <input type="text" value={editingItem.data.telemovel || ''} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, telemovel: e.target.value}})} />
+                    </div>
+                  </div>
+                  <div className="form-group" style={{ flexDirection: 'row', alignItems: 'center', gap: '10px' }}>
+                    <input type="checkbox" checked={editingItem.data.ativo} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, ativo: e.target.checked}})} />
+                    <label style={{ margin: 0 }}>Conta Ativa</label>
+                  </div>
+                </>
+              )}
+              {editingItem.type === 'hospital' && (
+                <>
+                  <div className="form-group">
+                    <label>Nome do Hospital:</label>
+                    <input type="text" value={editingItem.data.nome_hosp} readOnly style={{ background: '#f5f5f5' }} />
+                  </div>
+                  <div className="form-group">
+                    <label>Localidade:</label>
+                    <input type="text" value={editingItem.data.local_hosp} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, local_hosp: e.target.value}})} />
+                  </div>
+                </>
+              )}
+              {editingItem.type === 'episode' && (
+                <>
+                  <div className="form-group">
+                    <label>Código Episódio:</label>
+                    <input type="text" value={editingItem.data.cod_epis} readOnly style={{ background: '#f5f5f5' }} />
+                  </div>
+                  <div className="form-group">
+                    <label>Sintomas/Observações:</label>
+                    <textarea value={editingItem.data.sintomas || ''} onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, sintomas: e.target.value}})} />
+                  </div>
+                </>
+              )}
+
+              <div className="form-actions" style={{ marginTop: '2rem', display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
                 <button type="button" className="btn btn-secondary" onClick={() => setEditingItem(null)}>Cancelar</button>
                 <button type="submit" className="btn btn-primary"><Save size={18}/> Salvar Alterações</button>
               </div>
@@ -340,6 +461,10 @@ const Admin = () => {
                       </div>
                     </div>
                     <div className="form-group">
+                      <label>Telemóvel:</label>
+                      <input type="text" value={telemovel} onChange={(e) => setTelemovel(e.target.value)} placeholder="912345678 (Opcional)" />
+                    </div>
+                    <div className="form-group">
                       <label>Username:</label>
                       <input type="text" value={nomeUtilizador} onChange={(e) => setNomeUtilizador(e.target.value)} required placeholder="jose.santos" />
                     </div>
@@ -367,6 +492,57 @@ const Admin = () => {
             </div>
 
             <div className="admin-column">
+              {/* REGISTAR UTENTE (APP MOBILE) */}
+              <section className="card admin-section">
+                <div className="section-header-icon">
+                  <Users className="icon-blue" />
+                  <h3>Registar Utente (App Mobile)</h3>
+                </div>
+                <form onSubmit={criarUtenteApp} className="admin-form">
+                  <div className="form-group">
+                    <label>Nome Completo:</label>
+                    <input type="text" value={uNome} onChange={(e) => setUNome(e.target.value)} required placeholder="Ex: Maria Silva" />
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>E-mail:</label>
+                      <input type="email" value={uEmail} onChange={(e) => setUEmail(e.target.value)} required placeholder="maria@email.com" />
+                    </div>
+                    <div className="form-group">
+                      <label>Nº Utente:</label>
+                      <input type="number" value={uNum} onChange={(e) => setUNum(e.target.value)} required placeholder="123456789" />
+                    </div>
+                  </div>
+                  <div className="form-group">
+                    <label>Telemóvel:</label>
+                    <input type="text" value={uTel} onChange={(e) => setUTel(e.target.value)} placeholder="912345678" />
+                  </div>
+                  <div className="form-group">
+                    <label>Morada Completa:</label>
+                    <input type="text" value={uMorada} onChange={(e) => setUMorada(e.target.value)} placeholder="Rua, Nº, Andar..." />
+                  </div>
+                  <div className="form-row">
+                    <div className="form-group">
+                      <label>Localidade:</label>
+                      <input type="text" value={uLocalidade} onChange={(e) => setULocalidade(e.target.value)} placeholder="Cidade/Vila" />
+                    </div>
+                    <div className="form-group">
+                      <label>Sexo:</label>
+                      <select value={uSexo} onChange={(e) => setUSexo(e.target.value)}>
+                        <option value="M">Masculino</option>
+                        <option value="F">Feminino</option>
+                        <option value="O">Outro</option>
+                      </select>
+                    </div>
+                    <div className="form-group">
+                      <label>Data Nascimento:</label>
+                      <input type="date" value={uDataNasc} onChange={(e) => setUDataNasc(e.target.value)} />
+                    </div>
+                  </div>
+                  <button type="submit" className="btn btn-primary"><PlusCircle size={18}/> Registar e Enviar PIN</button>
+                </form>
+              </section>
+
               {/* REGISTAR HOSPITAL */}
               <section className="card admin-section">
                 <div className="section-header-icon">
