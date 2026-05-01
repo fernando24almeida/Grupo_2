@@ -4,14 +4,24 @@ from .config import configuracoes
 from ..models.models import PapelUtilizador, Utilizador, Hospital, Utente, FuncionarioHospital, Enfermeiro, Medico
 from .security import obter_hash_palavra_passe
 
-motor = create_engine(configuracoes.DATABASE_URL)
+motor = create_engine(
+    configuracoes.DATABASE_URL,
+    pool_pre_ping=True  # Verifica a conexão antes de usar (útil em produção como Render)
+)
 
 def obter_sessao():
     with Session(motor) as sessao:
         yield sessao
 
 def inicializar_bd():
-    SQLModel.metadata.create_all(motor)
+    try:
+        # Tenta criar as tabelas
+        SQLModel.metadata.create_all(motor)
+        print("✅ Base de dados inicializada com sucesso.")
+    except Exception as e:
+        print(f"❌ Erro ao ligar à base de dados: {e}")
+        print(f"💡 DICA: Verifique se a DATABASE_URL está correta no Render.")
+        raise e
     
     with Session(motor) as sessao:
         # Check if hospitals exist

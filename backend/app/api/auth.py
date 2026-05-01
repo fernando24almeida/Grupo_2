@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select, text
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 from typing import Optional, List
 from ..core.db import obter_sessao
 from ..core.security import verificar_palavra_passe, criar_token_acesso, obter_hash_palavra_passe, RoleChecker, obter_utilizador_atual
@@ -74,9 +74,7 @@ class LerUtilizador(BaseModel):
     num_func: Optional[int] = None
     ativo: bool
 
-    class Config:
-        from_attributes = True
-        orm_mode = True # Compatibilidade com Pydantic v1 e v2
+    model_config = ConfigDict(from_attributes=True)
 
 class CriarProfissional(BaseModel):
     num_func: int
@@ -184,6 +182,7 @@ def ativar_conta(dados: ValidarCodigo, sessao: Session = Depends(obter_sessao)):
         return {"message": "Conta de utente ativada! Já pode aceder à App Mobile."}
 
     raise HTTPException(status_code=404, detail="Utilizador/Utente não encontrado para este e-mail.")
+
 # --- RECUPERAÇÃO DE CONTA ---
 @router.post("/forgot-username")
 async def recuperar_utilizador(dados: RecuperarConta, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
@@ -248,9 +247,6 @@ def confirmar_redefinicao_password(dados: RedefinirPassword, sessao: Session = D
     return {"message": "Palavra-passe redefinida com sucesso!"}
 
 # --- GESTÃO DE UTILIZADORES ---
-from ..core.email import enviar_email_ativacao
-from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
-
 @router.post("/users", response_model=LerUtilizador, dependencies=[Depends(admin_only)])
 def criar_utilizador(request: Request, utilizador_in: CriarUtilizador, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
     try:
