@@ -1,5 +1,5 @@
 from passlib.context import CryptContext
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -17,19 +17,19 @@ def obter_hash_palavra_passe(palavra_passe):
 
 def criar_token_acesso(dados: dict, expira_delta: timedelta = None):
     para_codificar = dados.copy()
+    agora = datetime.now(timezone.utc)
     if expira_delta:
-        expira = datetime.utcnow() + expira_delta
+        expira = agora + expira_delta
     else:
-        expira = datetime.utcnow() + timedelta(minutes=configuracoes.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expira = agora + timedelta(minutes=configuracoes.ACCESS_TOKEN_EXPIRE_MINUTES)
     para_codificar.update({"exp": expira})
     jwt_codificado = jwt.encode(para_codificar, configuracoes.SECRET_KEY, algorithm=configuracoes.ALGORITHM)
     return jwt_codificado
 
 def obter_utilizador_atual(token: str = Depends(oauth2_scheme)):
-    # Importação local para evitar erro circular (Circular Import)
-    from .db import obter_sessao
+    # Importação local para evitar erro circular
+    from .db import motor
     from ..models.models import Utilizador
-    from sqlmodel import Session, select
 
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -42,8 +42,6 @@ def obter_utilizador_atual(token: str = Depends(oauth2_scheme)):
         if username is None:
             raise credentials_exception
         
-        # Obter sessão manualmente dentro da função
-        from .db import motor
         with Session(motor) as sessao:
             utilizador = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == username)).first()
             if not utilizador:
@@ -59,11 +57,10 @@ class RoleChecker:
     def __init__(self, allowed_roles: list):
         self.allowed_roles = allowed_roles
 
-    def __call__(self, user = Depends(obter_utilizador_atual)):
-        # Verificar o papel do utilizador através da tabela de papéis ou ID
-        # No seu sistema, o papel está no ID_ROLE. Vamos obter o nome.
-        from ..models.models import PapelUtilizador
+    def __call__(self, user: "Utilizador" = Depends(obter_utilizador_atual)):
         from .db import motor
+        from ..models.models import PapelUtilizador
+        
         with Session(motor) as sessao:
             papel = sessao.get(PapelUtilizador, user.id_role)
             nome_papel = papel.nome if papel else "USER"
