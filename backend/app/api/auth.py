@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlmodel import Session, select
+from sqlmodel import Session, select, text
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
 from ..core.db import obter_sessao
@@ -57,18 +57,19 @@ class ValidarCodigo(BaseModel):
     codigo: str
 
 class AtualizarUtilizador(BaseModel):
-    nome_utilizador: Optional[str] = None
     nome_completo: Optional[str] = None
+    email: Optional[EmailStr] = None
+    telemovel: Optional[str] = None
     palavra_passe: Optional[str] = None
-    id_role: Optional[int] = None # Uniformizado
-    num_func: Optional[int] = None
-    ativo: Optional[bool] = None
+    id_role: Optional[int] = None # Apenas Admin pode mudar
+    ativo: Optional[bool] = None # Apenas Admin pode mudar
 
 class LerUtilizador(BaseModel):
     id_utilizador: int
     nome_utilizador: str
     nome_completo: str
     email: str
+    telemovel: Optional[str] = None
     id_role: int # Uniformizado - RESOLVE O ERRO DE VALIDAÇÃO
     num_func: Optional[int] = None
     ativo: bool
@@ -163,17 +164,26 @@ def ativar_conta(dados: ValidarCodigo, sessao: Session = Depends(obter_sessao)):
             print(f"DEBUG: Código {dados.codigo} encontrado mas para email {existe_codigo.email} (esperado {email_limpo})")
         raise HTTPException(status_code=400, detail="Código inválido ou expirado")
     
-    utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == email_limpo)).first()
-    if not utilizador:
-        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
-    
-    utilizador.ativo = True
     validacao.utilizado = True
-    sessao.add(utilizador)
     sessao.add(validacao)
-    sessao.commit()
-    return {"message": "Conta ativada com sucesso!"}
 
+    # 1. Tentar ativar Utilizador (Staff)
+    utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == email_limpo)).first()
+    if utilizador:
+        utilizador.ativo = True
+        sessao.add(utilizador)
+        sessao.commit()
+        return {"message": "Conta de profissional ativada com sucesso!"}
+
+    # 2. Tentar ativar Utente (Mobile)
+    utente = sessao.exec(select(Utente).where(Utente.email == email_limpo)).first()
+    if utente:
+        utente.ativo = True
+        sessao.add(utente)
+        sessao.commit()
+        return {"message": "Conta de utente ativada! Já pode aceder à App Mobile."}
+
+    raise HTTPException(status_code=404, detail="Utilizador/Utente não encontrado para este e-mail.")
 # --- RECUPERAÇÃO DE CONTA ---
 @router.post("/forgot-username")
 async def recuperar_utilizador(dados: RecuperarConta, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
@@ -292,9 +302,78 @@ def criar_utilizador(request: Request, utilizador_in: CriarUtilizador, backgroun
         sessao.rollback()
         raise HTTPException(status_code=400, detail="Username ou e-mail já existe.")
 
+@router.get("/users/me", response_model=LerUtilizador)
+def obter_perfil_atual(utilizador_atual: Utilizador = Depends(obter_utilizador_atual)):
+    return utilizador_atual
+
 @router.get("/users", response_model=List[LerUtilizador], dependencies=[Depends(admin_only)])
 def listar_utilizadores(sessao: Session = Depends(obter_sessao)):
     return sessao.exec(select(Utilizador)).all()
+
+@router.patch("/users/me", response_model=LerUtilizador)
+def atualizar_proprio_perfil(dados: AtualizarUtilizador, utilizador_atual: Utilizador = Depends(obter_utilizador_atual), sessao: Session = Depends(obter_sessao)):
+    # Impedir que o utilizador mude campos que só o Admin pode mudar
+    if dados.id_role is not None or dados.ativo is not None:
+        raise HTTPException(status_code=403, detail="Não tem permissão para alterar o seu cargo ou estado da conta.")
+    
+    # Atualizar campos permitidos
+    if dados.nome_completo: utilizador_atual.nome_completo = dados.nome_completo
+    if dados.email: utilizador_atual.email = dados.email.lower().strip()
+    if dados.telemovel: utilizador_atual.telemovel = dados.telemovel
+    if dados.palavra_passe:
+        try:
+            CriarUtilizador.validar_password(dados.palavra_passe)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        utilizador_atual.hash_palavra_passe = obter_hash_palavra_passe(dados.palavra_passe)
+
+    sessao.add(utilizador_atual)
+    sessao.commit()
+    sessao.refresh(utilizador_atual)
+    return utilizador_atual
+
+@router.patch("/users/{id_utilizador}", response_model=LerUtilizador, dependencies=[Depends(admin_only)])
+def atualizar_utilizador_admin(id_utilizador: int, dados: AtualizarUtilizador, sessao: Session = Depends(obter_sessao)):
+    utilizador = sessao.get(Utilizador, id_utilizador)
+    if not utilizador:
+        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
+
+    # Admin pode editar campos adicionais
+    if dados.nome_completo: utilizador.nome_completo = dados.nome_completo
+    if dados.email: utilizador.email = dados.email.lower().strip()
+    if dados.telemovel: utilizador.telemovel = dados.telemovel
+    if dados.id_role: utilizador.id_role = dados.id_role
+    if dados.ativo is not None: utilizador.ativo = dados.ativo
+    if dados.palavra_passe:
+        try:
+            CriarUtilizador.validar_password(dados.palavra_passe)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        utilizador.hash_palavra_passe = obter_hash_palavra_passe(dados.palavra_passe)
+
+    sessao.add(utilizador)
+    sessao.commit()
+    sessao.refresh(utilizador)
+    return utilizador
+
+@router.delete("/users/{id_utilizador}", dependencies=[Depends(admin_only)])
+def eliminar_utilizador(id_utilizador: int, sessao: Session = Depends(obter_sessao)):
+    utilizador = sessao.get(Utilizador, id_utilizador)
+    if not utilizador:
+        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
+
+    # Limpar dependências que impedem a remoção (Foreign Keys)
+    sessao.execute(text("DELETE FROM audit_log WHERE id_utilizador = :uid"), {"uid": id_utilizador})
+    sessao.execute(text("DELETE FROM email_validation WHERE email = :email"), {"email": utilizador.email})
+    sessao.execute(text("DELETE FROM password_reset WHERE email = :email"), {"email": utilizador.email})
+
+    sessao.delete(utilizador)
+    try:
+        sessao.commit()
+        return {"message": f"Utilizador {utilizador.nome_utilizador} eliminado com sucesso"}
+    except Exception as e:
+        sessao.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro ao eliminar utilizador: {str(e)}")
 
 @router.post("/professionals", dependencies=[Depends(admin_only)])
 def criar_profissional(profissional: CriarProfissional, sessao: Session = Depends(obter_sessao)):

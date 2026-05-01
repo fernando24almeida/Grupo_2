@@ -20,6 +20,7 @@ const NewEpisode = () => {
   // Estados para Pesquisa
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [hospitals, setHospitals] = useState([]);
   const [isSearching, setIsSearching] = useState(false);
   const [selectedUtente, setSelectedUtente] = useState(null);
 
@@ -28,6 +29,7 @@ const NewEpisode = () => {
   const [newUtente, setNewUtente] = useState({
     num_utente: '',
     nome: '',
+    email: '',
     telemovel: '',
     morada: '',
     data_nascimento: '',
@@ -37,12 +39,22 @@ const NewEpisode = () => {
 
   const [message, setMessage] = useState(null);
 
-  // Update id_hospital if context changes
+  // Carregar Hospitais
   useEffect(() => {
-    if (utilizador?.hospital) {
-      setFormData(prev => ({ ...prev, id_hospital: utilizador.hospital }));
-    }
-  }, [utilizador]);
+    const fetchHospitals = async () => {
+      try {
+        const res = await axios.get('/clinical/hospitals');
+        setHospitals(res.data);
+        // Pré-selecionar o primeiro hospital se disponível e nenhum selecionado
+        if (res.data.length > 0 && !formData.id_hospital) {
+          setFormData(prev => ({ ...prev, id_hospital: res.data[0].nome_hosp }));
+        }
+      } catch (error) {
+        console.error('Erro ao carregar hospitais', error);
+      }
+    };
+    fetchHospitals();
+  }, []);
 
   const handleSearch = async (e) => {
     e.preventDefault();
@@ -83,18 +95,40 @@ const NewEpisode = () => {
 
   const handleCreateUtente = async (e) => {
     e.preventDefault();
+    setMessage(null);
+
+    // Validação local antes do envio
+    if (!newUtente.num_utente || !newUtente.nome || !newUtente.email) {
+      setMessage({ type: 'error', text: 'Nº Utente (SNS), Nome Completo e E-mail são obrigatórios.' });
+      return;
+    }
+
     try {
-      const res = await axios.post('/clinical/utentes', {
-        ...newUtente,
-        num_utente: parseInt(newUtente.num_utente)
-      });
-      setMessage({ type: 'success', text: `Utente ${newUtente.nome} registado com sucesso!` });
+      const payload = {
+        num_utente: parseInt(newUtente.num_utente),
+        nome: newUtente.nome,
+        email: newUtente.email.toLowerCase().trim(),
+        telemovel: newUtente.telemovel || null,
+        morada: newUtente.morada || null,
+        localidade: newUtente.localidade || null,
+        sexo: newUtente.sexo || "M",
+        data_nascimento: newUtente.data_nascimento || null
+      };
+
+      const res = await axios.post('/clinical/utentes', payload);
+      setMessage({ type: 'success', text: `Utente ${newUtente.nome} registado! PIN enviado para o e-mail.` });
       setSelectedUtente(res.data);
       setFormData(prev => ({ ...prev, id_utente: res.data.num_utente }));
       setShowUtenteForm(false);
     } catch (error) {
-      console.error('Erro ao criar utente', error);
-      setMessage({ type: 'error', text: 'Erro ao registar utente. Verifique se o número já existe.' });
+      console.error('Erro detalhado:', error.response?.data);
+      const detail = error.response?.data?.detail;
+      // Tratar diferentes formatos de erro do FastAPI
+      let msg = 'Erro ao registar utente.';
+      if (typeof detail === 'string') msg = detail;
+      else if (Array.isArray(detail)) msg = `Campo obrigatório em falta: ${detail[0]?.loc[1]}`;
+      
+      setMessage({ type: 'error', text: msg });
     }
   };
 
@@ -267,6 +301,15 @@ const NewEpisode = () => {
                     />
                   </div>
                   <div className="form-group">
+                    <label>E-mail (Para App Mobile):</label>
+                    <input 
+                      type="email" required 
+                      value={newUtente.email}
+                      onChange={(e) => setNewUtente({...newUtente, email: e.target.value})}
+                      placeholder="utente@email.com"
+                    />
+                  </div>
+                  <div className="form-group">
                     <label>Morada:</label>
                     <input 
                       type="text" required 
@@ -339,12 +382,17 @@ const NewEpisode = () => {
 
               <div className="form-group">
                 <label>Hospital de Registo:</label>
-                <input 
-                  type="text" 
-                  value={utilizador?.hospital || 'Não selecionado'} 
-                  readOnly 
-                  className="read-only-input"
-                />
+                <select 
+                  className="form-input"
+                  value={formData.id_hospital} 
+                  onChange={(e) => setFormData({...formData, id_hospital: e.target.value})}
+                  required
+                >
+                  <option value="">Selecione um Hospital...</option>
+                  {hospitals.map(h => (
+                    <option key={h.nome_hosp} value={h.nome_hosp}>{h.nome_hosp}</option>
+                  ))}
+                </select>
               </div>
 
               <div className="form-group">

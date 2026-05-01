@@ -9,9 +9,9 @@ class Configuracoes(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
     # Configurações SMTP (E-mail)
-    MAIL_USERNAME: str = "seu-email@gmail.com"
-    MAIL_PASSWORD: str = "sua-password-ou-app-password"
-    MAIL_FROM: str = "seu-email@gmail.com"
+    MAIL_USERNAME: str = "geral@sci.pt"
+    MAIL_PASSWORD: str = "jbfn alir tral urks"
+    MAIL_FROM: str = "geral@sci.pt"
     MAIL_PORT: int = 587
     MAIL_SERVER: str = "smtp.gmail.com"
     MAIL_FROM_NAME: str = "Portal Clínico G2"
