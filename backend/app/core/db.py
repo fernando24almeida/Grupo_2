@@ -3,6 +3,22 @@ from datetime import date
 from .config import configuracoes
 from ..models.models import PapelUtilizador, Utilizador, Hospital, Utente, FuncionarioHospital, Enfermeiro, Medico
 from .security import obter_hash_palavra_passe
+import logging
+
+# Configuração de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Tentar extrair o host para logar (sem mostrar a password)
+db_url = configuracoes.DATABASE_URL
+try:
+    if "@" in db_url:
+        host_info = db_url.split("@")[1]
+        logger.info(f"🔌 A tentar ligar à base de dados em: {host_info}")
+    else:
+        logger.info("🔌 A tentar ligar à base de dados (URL sem formato padrão)")
+except:
+    logger.info("🔌 A tentar ligar à base de dados...")
 
 motor = create_engine(
     configuracoes.DATABASE_URL,
@@ -37,6 +53,7 @@ def inicializar_bd():
             ut = Utente(
                 num_utente=123456789, 
                 nome="João Silva Exemplo", 
+                email="joao@exemplo.pt",
                 telemovel="912345678",
                 sexo="M", 
                 localidade="Lisboa", 

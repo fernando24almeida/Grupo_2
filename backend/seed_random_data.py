@@ -250,9 +250,15 @@ def criar_utentes(sessao: Session) -> List[int]:
 
     for num in ids:
         sexo = escolher(["M", "F"])
+        nome = fake.name_male() if sexo == "M" else fake.name_female()
+        # Gerar um email baseado no nome para ser mais realista
+        email_prefix = nome.lower().replace(" ", ".")
+        email = f"{email_prefix}{num}@exemplo.pt"
+
         utente = Utente(
             num_utente=num,
-            nome=fake.name_male() if sexo == "M" else fake.name_female(),
+            nome=nome,
+            email=email,
             telemovel=gerar_telemovel(),
             morada=fake.address().replace("\n", ", "),
             sexo=sexo,
