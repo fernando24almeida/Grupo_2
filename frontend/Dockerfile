@@ -1,5 +1,5 @@
 # Estágio 1: Build da aplicação React
-FROM node:18-alpine as build
+FROM node:18-alpine AS build
 
 WORKDIR /app
 
@@ -21,6 +21,6 @@ COPY --from=build /app/build /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
 # Expor a porta 80
-EXPOSE 80
+EXPOSE 10000
 
 CMD ["nginx", "-g", "daemon off;"]
