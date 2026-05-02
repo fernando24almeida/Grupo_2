@@ -17,7 +17,7 @@ try:
         # Check if admin user exists
         utilizador_admin = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == "admin")).first()
         if utilizador_admin:
-            print(f"Utilizador admin encontrado! ID: {utilizador_admin.id}, Nome: {utilizador_admin.nome_utilizador}")
+            print(f"Utilizador admin encontrado! ID: {utilizador_admin.id_utilizador}, Nome: {utilizador_admin.nome_utilizador}")
             
             # Test password
             pw_teste = "admin123"

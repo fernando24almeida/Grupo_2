@@ -3,15 +3,41 @@ from datetime import date
 from .config import configuracoes
 from ..models.models import PapelUtilizador, Utilizador, Hospital, Utente, FuncionarioHospital, Enfermeiro, Medico
 from .security import obter_hash_palavra_passe
+import logging
 
-motor = create_engine(configuracoes.DATABASE_URL)
+# Configuração de logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Tentar extrair o host para logar (sem mostrar a password)
+db_url = configuracoes.DATABASE_URL
+try:
+    if "@" in db_url:
+        host_info = db_url.split("@")[1]
+        logger.info(f"[DB] A tentar ligar à base de dados em: {host_info}")
+    else:
+        logger.info("[DB] A tentar ligar à base de dados (URL sem formato padrão)")
+except:
+    logger.info("[DB] A tentar ligar à base de dados...")
+
+motor = create_engine(
+    configuracoes.DATABASE_URL,
+    pool_pre_ping=True  # Verifica a conexão antes de usar (útil em produção como Render)
+)
 
 def obter_sessao():
     with Session(motor) as sessao:
         yield sessao
 
 def inicializar_bd():
-    SQLModel.metadata.create_all(motor)
+    try:
+        # Tenta criar as tabelas
+        SQLModel.metadata.create_all(motor)
+        print("[SUCCESS] Base de dados inicializada com sucesso.")
+    except Exception as e:
+        print(f"[ERROR] Erro ao ligar à base de dados: {e}")
+        print(f"[HINT] DICA: Verifique se a DATABASE_URL está correta no Render.")
+        raise e
     
     with Session(motor) as sessao:
         # Check if hospitals exist
@@ -27,12 +53,25 @@ def inicializar_bd():
             ut = Utente(
                 num_utente=123456789, 
                 nome="João Silva Exemplo", 
+                email="joao@exemplo.pt",
                 telemovel="912345678",
                 sexo="M", 
                 localidade="Lisboa", 
                 data_nascimento=date(1994, 1, 1)
             )
             sessao.add(ut)
+            
+            # Adicionar utente para o teste de API
+            ut_teste = Utente(
+                num_utente=111111111,
+                nome="Utente de Teste API",
+                email="teste_api@exemplo.pt",
+                telemovel="999999999",
+                sexo="M",
+                localidade="Teste",
+                data_nascimento=date(1990, 1, 1)
+            )
+            sessao.add(ut_teste)
             sessao.commit()
 
         # Check if roles exist

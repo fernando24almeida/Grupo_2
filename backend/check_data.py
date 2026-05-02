@@ -2,7 +2,7 @@ from sqlmodel import Session, create_engine, select
 from app.models.models import Utente
 import os
 
-DATABASE_URL = "postgresql://postgres:admin@localhost:5432/urgencias_g2"
+DATABASE_URL = "postgresql://postgres:123456@localhost:5432/urgencias_g2"
 engine = create_engine(DATABASE_URL)
 
 def check_utente():

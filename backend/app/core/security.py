@@ -59,7 +59,7 @@ class RoleChecker:
     def __init__(self, allowed_roles: list):
         self.allowed_roles = allowed_roles
 
-    def __call__(self, user: Utilizador = Depends(obter_utilizador_atual)):
+    def __call__(self, user = Depends(obter_utilizador_atual)):
         # Verificar o papel do utilizador através da tabela de papéis ou ID
         # No seu sistema, o papel está no ID_ROLE. Vamos obter o nome.
         from ..models.models import PapelUtilizador
