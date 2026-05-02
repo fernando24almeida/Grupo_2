@@ -17,9 +17,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar o restante do código da aplicação
 COPY . .
 
-# Expor a porta que o FastAPI utiliza
+# Expor a porta que o FastAPI utiliza (o Render detecta esta porta)
 EXPOSE 8000
 
-# Comando para iniciar a aplicação
-# Nota: "app.main:app" assume que estamos no diretório /app (que contém a pasta 'app')
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Comando para iniciar a aplicação usando a porta definida pelo Render (variável PORT)
+# Se a variável PORT não estiver definida, usa a 8000 por defeito.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+
