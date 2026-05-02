@@ -241,6 +241,26 @@ const Admin = () => {
     }
   };
 
+  const reenviarAtivacaoUtente = async (numUtente) => {
+    if (!window.confirm('Deseja reenviar o PIN e código de ativação para este utente? O PIN anterior deixará de funcionar.')) return;
+    try {
+      await axios.post(`/clinical/utentes/${numUtente}/resend-activation`);
+      setMensagem({ tipo: 'success', texto: 'Novo PIN e código enviados com sucesso!' });
+      fetchData();
+    } catch (erro) {
+      setMensagem({ tipo: 'error', texto: erro.response?.data?.detail || 'Erro ao reenviar ativação.' });
+    }
+  };
+
+  const toggleUtenteStatus = async (numUtente) => {
+    try {
+      await axios.post(`/clinical/utentes/${numUtente}/toggle-status`);
+      fetchData();
+    } catch (erro) {
+      setMensagem({ tipo: 'error', texto: 'Erro ao alterar estado do utente.' });
+    }
+  };
+
   return (
     <div className="admin-page">
       <header className="page-header">
@@ -687,6 +707,7 @@ const Admin = () => {
                     <th>Nome</th>
                     <th>Telemóvel</th>
                     <th>Localidade</th>
+                    <th>Estado</th>
                     <th>Ações</th>
                   </tr>
                 </thead>
@@ -703,9 +724,27 @@ const Admin = () => {
                       <td>{u.nome}</td>
                       <td>{u.telemovel || 'N/A'}</td>
                       <td>{u.localidade || 'N/A'}</td>
+                      <td><span className={`status-pill ${u.ativo ? 'active' : 'inactive'}`}>{u.ativo ? 'Ativo' : 'Pendente'}</span></td>
                       <td className="actions-cell">
-                        <button className="btn-icon" onClick={() => setEditingItem({type: 'utente', data: {...u}})}><Edit2 size={16}/></button>
-                        <button className="btn-icon btn-del" onClick={() => handleDelete('utente', u.num_utente)}><Trash2 size={16}/></button>
+                        <button className="btn-icon" onClick={() => setEditingItem({type: 'utente', data: {...u}})} title="Editar Utente"><Edit2 size={16}/></button>
+                        <button 
+                            className={`btn-icon ${u.ativo ? 'btn-warn' : 'btn-ok'}`} 
+                            title={u.ativo ? "Suspender Utente" : "Reativar Utente"}
+                            onClick={() => toggleUtenteStatus(u.num_utente)}
+                          >
+                            <Activity size={16}/>
+                        </button>
+                        {!u.ativo && (
+                          <button 
+                            className="btn-icon btn-ok" 
+                            title="Reenviar PIN/Ativação" 
+                            onClick={() => reenviarAtivacaoUtente(u.num_utente)}
+                            style={{ color: 'var(--primary)', borderColor: 'var(--primary)' }}
+                          >
+                            <Mail size={16}/>
+                          </button>
+                        )}
+                        <button className="btn-icon btn-del" onClick={() => handleDelete('utente', u.num_utente)} title="Eliminar Utente"><Trash2 size={16}/></button>
                       </td>
                     </tr>
                   ))}
@@ -821,7 +860,11 @@ const Admin = () => {
         .input-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
         .with-icon { padding-left: 40px !important; }
         .actions-cell { display: flex; gap: 8px; }
-        .btn-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: white; cursor: pointer; color: var(--text-muted); }
+        .btn-icon { width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 6px; border: 1px solid var(--border); background: white; cursor: pointer; color: var(--text-muted); transition: all 0.2s; }
+        .btn-icon:hover { background: #f8fafc; color: var(--primary); border-color: var(--primary); }
+        .btn-ok:hover { color: #166534; border-color: #166534; background: #dcfce7; }
+        .btn-warn:hover { color: #854d0e; border-color: #854d0e; background: #fef9c3; }
+        .btn-del:hover { color: #991b1b; border-color: #991b1b; background: #fee2e2; }
         .status-pill { padding: 4px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 700; }
         .status-pill.active { background: #dcfce7; color: #166534; }
         .status-pill.inactive { background: #fef9c3; color: #854d0e; }

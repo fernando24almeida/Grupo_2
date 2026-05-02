@@ -2,7 +2,8 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from .api import auth, clinical, analytics
-from .core.db import inicializar_bd
+from .core.db import inicializar_bd, obter_sessao
+from fastapi import Depends
 from .routes.analytics_ai import router as analytics_ai_router
 
 app = FastAPI(title="API do Sistema de Gestão Clínica")
@@ -33,6 +34,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/health")
+async def health_check(sessao=Depends(obter_sessao)):
+    try:
+        from sqlmodel import text
+        sessao.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        return {"status": "error", "database": "disconnected", "details": str(e)}
 
 @app.get("/")
 async def root():

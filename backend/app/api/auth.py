@@ -375,6 +375,21 @@ def eliminar_utilizador(id_utilizador: int, sessao: Session = Depends(obter_sess
         sessao.rollback()
         raise HTTPException(status_code=500, detail=f"Erro ao eliminar utilizador: {str(e)}")
 
+@router.post("/users/{id_utilizador}/toggle-status", dependencies=[Depends(admin_only)])
+def alternar_estado_utilizador(id_utilizador: int, sessao: Session = Depends(obter_sessao), admin: Utilizador = Depends(obter_utilizador_atual)):
+    utilizador = sessao.get(Utilizador, id_utilizador)
+    if not utilizador:
+        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
+    
+    utilizador.ativo = not utilizador.ativo
+    sessao.add(utilizador)
+    sessao.commit()
+    
+    acao = "ACTIVATED" if utilizador.ativo else "SUSPENDED"
+    log_audit(sessao, admin.id_utilizador, acao, "utilizador", str(id_utilizador), f"Estado do utilizador alterado para {'Ativo' if utilizador.ativo else 'Suspenso'}")
+    
+    return {"message": f"Utilizador {'reativado' if utilizador.ativo else 'suspenso'} com sucesso."}
+
 @router.post("/professionals", dependencies=[Depends(admin_only)])
 def criar_profissional(profissional: CriarProfissional, sessao: Session = Depends(obter_sessao)):
     # 1. Verificar se o funcionário já existe na tabela base

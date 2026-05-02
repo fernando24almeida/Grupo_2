@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, date
 from ..core.db import obter_sessao
 from ..models.models import Utente, EpisodioUrgencia, Triagem, Ato, Prescricao, Internamento, Hospital, Envolve, FuncionarioHospital
 from ..core.security import RoleChecker
+from ..core.audit import log_audit
 
 router = APIRouter()
 admin_only = RoleChecker(["ADMIN"])
@@ -33,6 +34,7 @@ class AtualizarUtente(BaseModel):
     sexo: Optional[str] = None
     localidade: Optional[str] = None
     data_nascimento: Optional[datetime] = None
+    ativo: Optional[bool] = None
 
 class AtualizarHospital(BaseModel):
     local_hosp: Optional[str] = None
@@ -108,7 +110,7 @@ def pesquisar_utente(
 
 import random
 import string
-from ..core.security import obter_hash_palavra_passe, verificar_palavra_passe, criar_token_acesso
+from ..core.security import obter_hash_palavra_passe, verificar_palavra_passe, criar_token_acesso, obter_utilizador_atual
 from ..core.email import enviar_email_ativacao
 from ..models.models import EmailValidation
 
@@ -192,7 +194,11 @@ def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao:
         print(f"\n📧 [DEBUG MOBILE] Utente {novo_utente.num_utente} | PIN: {pin_temporario} | Código: {codigo_ativacao}\n")
         
         sessao.refresh(novo_utente)
-        return novo_utente
+        return {
+            "success": True,
+            "message": "Utente registado com sucesso! Verifique o seu e-mail para ativar a conta.",
+            "data": novo_utente
+        }
     except Exception as e:
         sessao.rollback()
         print(f"ERRO CRÍTICO AO CRIAR UTENTE: {str(e)}")
@@ -203,17 +209,24 @@ def login_utente(dados: LoginUtente, sessao: Session = Depends(obter_sessao)):
     utente = sessao.get(Utente, dados.num_utente)
     if not utente or not verificar_palavra_passe(dados.pin, utente.password_hash):
         raise HTTPException(status_code=401, detail="Número de utente ou PIN incorretos")
-    
+
     if not utente.ativo:
         raise HTTPException(status_code=403, detail="Conta não ativada. Verifique o seu e-mail.")
-    
+
     token = criar_token_acesso(dados={"sub": str(utente.num_utente), "role": "UTENTE"})
-    
+
     return {
-        "access_token": token,
-        "token_type": "bearer",
-        "primeiro_acesso": utente.primeiro_acesso,
-        "nome": utente.nome
+        "success": True,
+        "message": "Login realizado com sucesso",
+        "data": {
+            "token": token,
+            "mfa_required": False,
+            "utente": {
+                "num_utente": str(utente.num_utente),
+                "nome": utente.nome,
+                "email": utente.email
+            }
+        }
     }
 
 @router.post("/utentes/change-pin")
@@ -233,6 +246,64 @@ def alterar_pin_utente(dados: AlterarPinUtente, sessao: Session = Depends(obter_
 def ler_utentes(sessao: Session = Depends(obter_sessao)):
     utentes = sessao.exec(select(Utente)).all()
     return utentes
+
+@router.post("/utentes/{num_utente}/resend-activation", dependencies=[Depends(admin_only)])
+async def reenviar_ativacao_utente(num_utente: int, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao), admin: Utilizador = Depends(obter_utilizador_atual)):
+    utente = sessao.get(Utente, num_utente)
+    if not utente:
+        raise HTTPException(status_code=404, detail="Utente não encontrado")
+    
+    if utente.ativo:
+        raise HTTPException(status_code=400, detail="Este utente já tem a conta ativa.")
+
+    # 1. Gerar novo PIN temporário
+    pin_temporario = ''.join(random.choices(string.digits, k=6))
+    
+    # 2. Gerar novo código de ativação
+    codigo_ativacao = f"{random.randint(100000, 999999)}"
+    
+    try:
+        # Atualizar a password do utente para o novo PIN
+        utente.password_hash = obter_hash_palavra_passe(pin_temporario)
+        utente.primeiro_acesso = True
+        sessao.add(utente)
+        
+        # Criar novo registro de validação
+        validacao = EmailValidation(
+            email=utente.email, 
+            codigo=codigo_ativacao, 
+            expira_em=datetime.now() + timedelta(hours=24)
+        )
+        sessao.add(validacao)
+        sessao.commit()
+        
+        # Enviar e-mail
+        background_tasks.add_task(enviar_email_ativacao, utente.email, utente.nome, f"{codigo_ativacao} (PIN Mobile: {pin_temporario})")
+        
+        log_audit(sessao, admin.id_utilizador, "RESEND_ACTIVATION", "utente", str(num_utente), f"Novo PIN e código enviados para {utente.email}")
+        
+        print(f"\n📧 [DEBUG REENVIO] Utente {utente.num_utente} | Novo PIN: {pin_temporario} | Novo Código: {codigo_ativacao}\n")
+        
+        return {"message": "Novo PIN e código de ativação enviados com sucesso."}
+    except Exception as e:
+        sessao.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro ao processar reenvio: {str(e)}")
+
+@router.post("/utentes/{num_utente}/toggle-status", dependencies=[Depends(admin_only)])
+def alternar_estado_utente(num_utente: int, sessao: Session = Depends(obter_sessao), admin: Utilizador = Depends(obter_utilizador_atual)):
+    utente = sessao.get(Utente, num_utente)
+    if not utente:
+        raise HTTPException(status_code=404, detail="Utente não encontrado")
+    
+    # Alternar estado
+    utente.ativo = not utente.ativo
+    sessao.add(utente)
+    sessao.commit()
+    
+    acao = "ACTIVATED" if utente.ativo else "SUSPENDED"
+    log_audit(sessao, admin.id_utilizador, acao, "utente", str(num_utente), f"Estado do utente alterado para {'Ativo' if utente.ativo else 'Suspenso'}")
+    
+    return {"message": f"Utente {'reativado' if utente.ativo else 'suspenso'} com sucesso."}
 
 @router.patch("/utentes/{num_utente}", response_model=Utente, dependencies=[Depends(admin_only)])
 def atualizar_utente(num_utente: int, utente_in: AtualizarUtente, sessao: Session = Depends(obter_sessao)):
@@ -517,7 +588,22 @@ def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sess
             "prescricoes": prescricoes
         })
     
-    return historico
+    resumo_historico = []
+    for item in historico:
+        ep = item["episodio"]
+        tri = item["triagem"]
+        resumo_historico.append({
+            "id": str(ep.cod_epis),
+            "data": ep.data_h_entrada.strftime("%Y-%m-%d %H:%M"),
+            "hospital": ep.id_hospital,
+            "estado": "Concluído" if ep.data_h_saida else "Em curso",
+            "prioridade": tri.prioridade if tri else "N/A"
+        })
+    return {
+        "success": True,
+        "message": "Histórico obtido com sucesso",
+        "data": resumo_historico
+    }
 
 @router.get("/episodes/{cod_epis}/prescriptions", response_model=List[Prescricao])
 def listar_prescricoes_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
