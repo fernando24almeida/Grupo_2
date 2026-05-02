@@ -59,10 +59,6 @@ class RoleChecker:
     def __init__(self, allowed_roles: list):
         self.allowed_roles = allowed_roles
 
-##<<<<<<< HEAD
-    def __call__(self, user = Depends(obter_utilizador_atual)):
-        if user["role"] not in self.allowed_roles:
-##=======
     def __call__(self, user = Depends(obter_utilizador_atual)):
         # Verificar o papel do utilizador através da tabela de papéis ou ID
         # No seu sistema, o papel está no ID_ROLE. Vamos obter o nome.
@@ -73,7 +69,6 @@ class RoleChecker:
             nome_papel = papel.nome if papel else "USER"
             
         if nome_papel not in self.allowed_roles:
-##>>>>>>> 8f4d9d9702700229af7dbe858d17bfd90bbf58f9
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Você não tem permissão para aceder a este recurso"

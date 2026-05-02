@@ -14,11 +14,11 @@ db_url = configuracoes.DATABASE_URL
 try:
     if "@" in db_url:
         host_info = db_url.split("@")[1]
-        logger.info(f"🔌 A tentar ligar à base de dados em: {host_info}")
+        logger.info(f"[DB] A tentar ligar à base de dados em: {host_info}")
     else:
-        logger.info("🔌 A tentar ligar à base de dados (URL sem formato padrão)")
+        logger.info("[DB] A tentar ligar à base de dados (URL sem formato padrão)")
 except:
-    logger.info("🔌 A tentar ligar à base de dados...")
+    logger.info("[DB] A tentar ligar à base de dados...")
 
 motor = create_engine(
     configuracoes.DATABASE_URL,
@@ -33,10 +33,10 @@ def inicializar_bd():
     try:
         # Tenta criar as tabelas
         SQLModel.metadata.create_all(motor)
-        print("✅ Base de dados inicializada com sucesso.")
+        print("[SUCCESS] Base de dados inicializada com sucesso.")
     except Exception as e:
-        print(f"❌ Erro ao ligar à base de dados: {e}")
-        print(f"💡 DICA: Verifique se a DATABASE_URL está correta no Render.")
+        print(f"[ERROR] Erro ao ligar à base de dados: {e}")
+        print(f"[HINT] DICA: Verifique se a DATABASE_URL está correta no Render.")
         raise e
     
     with Session(motor) as sessao:
@@ -60,6 +60,18 @@ def inicializar_bd():
                 data_nascimento=date(1994, 1, 1)
             )
             sessao.add(ut)
+            
+            # Adicionar utente para o teste de API
+            ut_teste = Utente(
+                num_utente=111111111,
+                nome="Utente de Teste API",
+                email="teste_api@exemplo.pt",
+                telemovel="999999999",
+                sexo="M",
+                localidade="Teste",
+                data_nascimento=date(1990, 1, 1)
+            )
+            sessao.add(ut_teste)
             sessao.commit()
 
         # Check if roles exist
