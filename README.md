@@ -17,7 +17,8 @@ Modular system for clinical management, including emergency episodes, triage, in
 3. Execute `database/schema.sql` to initialize the tables and seed data.
 
 ### 2. Backend
-1. Navigate to `backend/`.
+1. Navigate to `cd backend/`.
+2. 'Remove-Item -Recurse -Force venv'
 2. Create a virtual environment: `python -m venv venv`.
 3. Activate it: `venv\Scripts\activate`.
 4. Install dependencies: `pip install -r requirements.txt`.

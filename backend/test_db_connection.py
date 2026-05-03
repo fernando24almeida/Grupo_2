@@ -2,8 +2,9 @@ from sqlmodel import create_engine, Session, select
 import sys
 import os
 
-# Add the app directory to sys.path
-sys.path.append(os.path.join(os.getcwd(), 'app'))
+# Add the backend directory to sys.path
+sys.path.append(os.path.join(os.getcwd(), 'backend'))
+sys.path.append(os.path.join(os.getcwd(), 'backend', 'app'))
 
 try:
     from app.core.config import configuracoes
