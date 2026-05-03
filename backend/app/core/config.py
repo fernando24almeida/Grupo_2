@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings
 from typing import Optional
 
 class Configuracoes(BaseSettings):
-    DATABASE_URL: str = "postgresql://postgres:admin@localhost:5432/urgencias_g2"
+    DATABASE_URL: str = "postgresql://postgres:Fundao275.@127.0.0.1:5432/urgencias_g2"
     SECRET_KEY: str = "supersecretkey"
     ENCRYPTION_KEY: str = "z2AkT7uJkt85JNw4pjZ5ZlblXpMjMQZ49QBT673bUEE=" # Deve ser gerada via Fernet.generate_key()
     ALGORITHM: str = "HS256"

@@ -2,8 +2,9 @@ from sqlmodel import create_engine, Session, select
 import sys
 import os
 
-# Add the app directory to sys.path
-sys.path.append(os.path.join(os.getcwd(), 'app'))
+# Add the backend directory to sys.path
+sys.path.append(os.path.join(os.getcwd(), 'backend'))
+sys.path.append(os.path.join(os.getcwd(), 'backend', 'app'))
 
 try:
     from app.core.config import configuracoes
@@ -17,7 +18,7 @@ try:
         # Check if admin user exists
         utilizador_admin = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == "admin")).first()
         if utilizador_admin:
-            print(f"Utilizador admin encontrado! ID: {utilizador_admin.id}, Nome: {utilizador_admin.nome_utilizador}")
+            print(f"Utilizador admin encontrado! ID: {utilizador_admin.id_utilizador}, Nome: {utilizador_admin.nome_utilizador}")
             
             # Test password
             pw_teste = "admin123"
