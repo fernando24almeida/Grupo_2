@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { 
   UserCog, Users, PlusCircle, Shield, Activity, Save, 
-  Trash2, Edit2, Search, Hotel, Clipboard, X, Mail, User
+  Trash2, Edit2, Search, Hotel, Clipboard, X, Mail, User, ShieldCheck
 } from 'lucide-react';
 
 const Admin = () => {
@@ -661,13 +661,25 @@ const Admin = () => {
                         <td><span className={`status-pill ${u.ativo ? 'active' : 'inactive'}`}>{u.ativo ? 'Ativo' : 'Pendente'}</span></td>
                         <td className="actions-cell">
                           <button className="btn-icon" title="Editar" onClick={() => setEditingItem({type: 'user', data: {...u}})}><Edit2 size={16}/></button>
-                          <button 
-                            className={`btn-icon ${u.ativo ? 'btn-warn' : 'btn-ok'}`} 
-                            title={u.ativo ? "Desativar" : "Ativar"}
-                            onClick={() => toggleUserStatus(u.id_utilizador)}
-                          >
-                            <Activity size={16}/>
-                          </button>
+                          {!u.ativo && (
+                            <button 
+                              className="btn-icon btn-ok" 
+                              title="Ativação Manual"
+                              onClick={() => toggleUserStatus(u.id_utilizador)}
+                              style={{ color: '#166534', borderColor: '#166534' }}
+                            >
+                              <ShieldCheck size={16}/>
+                            </button>
+                          )}
+                          {u.ativo && (
+                            <button 
+                              className={`btn-icon btn-warn`} 
+                              title="Suspender Utilizador"
+                              onClick={() => toggleUserStatus(u.id_utilizador)}
+                            >
+                              <Activity size={16}/>
+                            </button>
+                          )}
                           <button className="btn-icon btn-del" title="Eliminar" onClick={() => handleDelete('user', u.id_utilizador)}><Trash2 size={16}/></button>
                         </td>
                       </tr>
@@ -727,16 +739,28 @@ const Admin = () => {
                       <td><span className={`status-pill ${u.ativo ? 'active' : 'inactive'}`}>{u.ativo ? 'Ativo' : 'Pendente'}</span></td>
                       <td className="actions-cell">
                         <button className="btn-icon" onClick={() => setEditingItem({type: 'utente', data: {...u}})} title="Editar Utente"><Edit2 size={16}/></button>
-                        <button 
-                            className={`btn-icon ${u.ativo ? 'btn-warn' : 'btn-ok'}`} 
-                            title={u.ativo ? "Suspender Utente" : "Reativar Utente"}
-                            onClick={() => toggleUtenteStatus(u.num_utente)}
-                          >
-                            <Activity size={16}/>
-                        </button>
                         {!u.ativo && (
                           <button 
                             className="btn-icon btn-ok" 
+                            title="Ativação Manual"
+                            onClick={() => toggleUtenteStatus(u.num_utente)}
+                            style={{ color: '#166534', borderColor: '#166534' }}
+                          >
+                            <Shield size={16}/>
+                          </button>
+                        )}
+                        {u.ativo && (
+                          <button 
+                              className={`btn-icon btn-warn`} 
+                              title="Suspender Utente"
+                              onClick={() => toggleUtenteStatus(u.num_utente)}
+                            >
+                              <Activity size={16}/>
+                          </button>
+                        )}
+                        {!u.ativo && (
+                          <button 
+                            className="btn-icon" 
                             title="Reenviar PIN/Ativação" 
                             onClick={() => reenviarAtivacaoUtente(u.num_utente)}
                             style={{ color: 'var(--primary)', borderColor: 'var(--primary)' }}
