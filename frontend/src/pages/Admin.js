@@ -52,7 +52,6 @@ const Admin = () => {
   const fetchData = async () => {
     // Carregar papéis e hospitais primeiro pois são usados para lookup
     try {
-<<<<<<< HEAD
       console.log('Iniciando carregamento de dados...');
       const [resPapeis, resHospitais, resUsers, resUtentes, resEpisodios] = await Promise.allSettled([
         axios.get('/auth/roles'),
@@ -80,25 +79,6 @@ const Admin = () => {
 
     } catch (erro) {
       console.error('Erro fatal ao carregar dados', erro);
-=======
-      const resPapeis = await axios.get('/auth/roles');
-      setPapeis(resPapeis.data);
-    } catch (err) { console.error('Erro ao carregar papéis', err); }
-
-    try {
-      const resHospitais = await axios.get('/clinical/hospitals');
-      setHospitais(resHospitais.data);
-    } catch (err) { console.error('Erro ao carregar hospitais', err); }
-
-    // Carregar utilizadores
-    try {
-      const resUsers = await axios.get('/auth/users');
-      setUtilizadores(resUsers.data || []);
-      console.log('Utilizadores carregados:', resUsers.data?.length);
-    } catch (err) { 
-      console.error('Erro ao carregar utilizadores:', err.response?.status, err.response?.data);
-      setUtilizadores([]); // Garantir que fica vazio em caso de erro
->>>>>>> 68a3af65a36bee716081c64aefd66f42dd9e8aab
     }
 
     // Carregar utentes
@@ -902,107 +882,7 @@ const Admin = () => {
             </div>
           </section>
         )}
-<<<<<<< HEAD
         
-        {/* LISTAGEM DE UTENTES */}
-        {activeTab === 'utentes' && (
-          <section className="card">
-            <div className="table-controls">
-              <div className="search-box">
-                <Search size={18} />
-                <input type="text" placeholder="Pesquisar por nome ou nº utente..." value={filtros.utente} onChange={e => setFiltros({...filtros, utente: e.target.value})} />
-              </div>
-            </div>
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr><th>Nº Utente</th><th>Nome</th><th>Telemóvel</th><th>Localidade</th><th>Ações</th></tr>
-                </thead>
-                <tbody>
-                  {utentes.filter(u => u.nome.toLowerCase().includes(filtros.utente.toLowerCase()) || u.num_utente.toString().includes(filtros.utente)).map(u => (
-                    <tr key={u.num_utente}>
-                      <td>{u.num_utente}</td>
-                      <td>{u.nome}</td>
-                      <td>{u.telemovel}</td>
-                      <td>{u.localidade}</td>
-                      <td className="actions-cell">
-                        <button className="btn-icon" onClick={() => setEditingItem({type: 'utente', data: {...u}})}><Edit2 size={16}/></button>
-                        <button className="btn-icon btn-del" onClick={() => handleDelete('utente', u.num_utente)}><Trash2 size={16}/></button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
-
-        {/* LISTAGEM DE EPISÓDIOS */}
-        {activeTab === 'episodes' && (
-          <section className="card">
-            <div className="table-controls">
-              <div className="search-box">
-                <Search size={18} />
-                <input type="text" placeholder="Pesquisar por código ou hospital..." value={filtros.episode} onChange={e => setFiltros({...filtros, episode: e.target.value})} />
-              </div>
-            </div>
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr><th>Código</th><th>Utente</th><th>Hospital</th><th>Entrada</th><th>Ações</th></tr>
-                </thead>
-                <tbody>
-                  {episodios.filter(e => e.cod_epis.toLowerCase().includes(filtros.episode.toLowerCase()) || e.id_hospital.toLowerCase().includes(filtros.episode.toLowerCase())).map(e => (
-                    <tr key={e.cod_epis}>
-                      <td>{e.cod_epis}</td>
-                      <td>{e.id_utente}</td>
-                      <td>{e.id_hospital}</td>
-                      <td>{new Date(e.data_h_entrada).toLocaleString()}</td>
-                      <td className="actions-cell">
-                        <button className="btn-icon" onClick={() => setEditingItem({type: 'episode', data: {...e}})}><Edit2 size={16}/></button>
-                        <button className="btn-icon btn-del" onClick={() => handleDelete('episode', e.cod_epis)}><Trash2 size={16}/></button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
-
-        {/* LISTAGEM DE HOSPITAIS */}
-        {activeTab === 'hospitals' && (
-          <section className="card">
-            <div className="table-controls">
-              <div className="search-box">
-                <Search size={18} />
-                <input type="text" placeholder="Pesquisar hospital..." value={filtros.hospital} onChange={e => setFiltros({...filtros, hospital: e.target.value})} />
-              </div>
-            </div>
-            <div className="table-container">
-              <table>
-                <thead>
-                  <tr><th>Nome</th><th>Localidade</th><th>Ações</th></tr>
-                </thead>
-                <tbody>
-                  {hospitais.filter(h => h.nome_hosp.toLowerCase().includes(filtros.hospital.toLowerCase())).map(h => (
-                    <tr key={h.nome_hosp}>
-                      <td>{h.nome_hosp}</td>
-                      <td>{h.local_hosp}</td>
-                      <td className="actions-cell">
-                        <button className="btn-icon" onClick={() => setEditingItem({type: 'hospital', data: {...h}})}><Edit2 size={16}/></button>
-                        <button className="btn-icon btn-del" onClick={() => handleDelete('hospital', h.nome_hosp)}><Trash2 size={16}/></button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        )}
-        
-=======
->>>>>>> 68a3af65a36bee716081c64aefd66f42dd9e8aab
       </div>
 
       <style jsx>{`
