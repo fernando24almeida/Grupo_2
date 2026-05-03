@@ -9,7 +9,8 @@ import {
   LogOut, 
   Activity,
   UserCog,
-  BarChart3
+  BarChart3,
+  User
 } from 'lucide-react';
 
 const Layout = ({ children }) => {
@@ -60,6 +61,14 @@ const Layout = ({ children }) => {
         </nav>
 
         <div className="sidebar-footer">
+          <Link
+            to="/profile"
+            className={`nav-item ${location.pathname === '/profile' ? 'active' : ''}`}
+            style={{ marginBottom: '0.5rem' }}
+          >
+            <User size={20} />
+            <span>O Meu Perfil</span>
+          </Link>
           <div className="user-info" style={{ marginBottom: '1rem', padding: '0 1rem', fontSize: '0.875rem', color: '#94a3b8' }}>
             <p style={{ color: 'white', fontWeight: 600 }}>{utilizador.nome_utilizador}</p>
             <p>{utilizador.hospital}</p>

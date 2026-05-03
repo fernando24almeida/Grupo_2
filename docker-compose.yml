@@ -26,13 +26,13 @@ services:
       - SECRET_KEY=supersecretkey
       - ENCRYPTION_KEY=T0ZfU2VjcmV0X0VuY3J5cHRpb25fS2V5X0Zvcl9QYXRpZW50X0RhdGE=
       - MAIL_USERNAME=geral@sci.pt
-      - MAIL_PASSWORD=wynz qdap prjb gjnf
+      - MAIL_PASSWORD=jbfn alir tral urks
       - MAIL_FROM=geral@sci.pt
       - MAIL_SERVER=smtp.gmail.com
-      - MAIL_PORT=465
+      - MAIL_PORT=587
       - MAIL_FROM_NAME="Portal Clínico G2"
-      - MAIL_STARTTLS=False
-      - MAIL_SSL_TLS=True
+      - MAIL_STARTTLS=True
+      - MAIL_SSL_TLS=False
       - USE_CREDENTIALS=True
     ports:
       - "8000:8000"
