@@ -55,7 +55,7 @@ class Hospital(SQLModel, table=True):
 class Utente(SQLModel, table=True):
     num_utente: int = Field(primary_key=True)
     nome: str = Field(index=True)
-    email: str = Field(unique=True, index=True)
+    email: str = Field(index=True) # Removido unique=True para permitir dependentes (ex: filhos)
     telemovel: Optional[str] = Field(default=None, index=True)
     morada: Optional[str] = None
     sexo: Optional[str] = None
@@ -64,6 +64,7 @@ class Utente(SQLModel, table=True):
     password_hash: Optional[str] = None
     ativo: bool = Field(default=False)
     primeiro_acesso: bool = Field(default=True)
+    parentesco: Optional[str] = None # Grau de parentesco com o titular do email
 
 class FuncionarioHospital(SQLModel, table=True):
     __tablename__ = "funcionario_hospital"
@@ -74,6 +75,7 @@ class FuncionarioHospital(SQLModel, table=True):
 class Medico(SQLModel, table=True):
     num_func: int = Field(primary_key=True, foreign_key="funcionario_hospital.num_func")
     estagiario: Optional[str] = None
+    especialidade: Optional[str] = None
 
 class Enfermeiro(SQLModel, table=True):
     num_func: int = Field(primary_key=True, foreign_key="funcionario_hospital.num_func")
@@ -87,6 +89,7 @@ class EpisodioUrgencia(SQLModel, table=True):
     id_hospital: str = Field(sa_column=Column("id_hosp", String, ForeignKey("hospital.nome_hosp")))
     sintomas: Optional[str] = None
     observacoes: Optional[str] = None
+    id_utilizador_rececao: Optional[int] = Field(default=None, foreign_key="utilizador.id_utilizador")
 
 class Triagem(SQLModel, table=True):
     num_triagem: Optional[int] = Field(default=None, primary_key=True)
@@ -106,6 +109,10 @@ class Ato(SQLModel, table=True):
     cod_epis: str = Field(foreign_key="episodio_urgencia.cod_epis")
     id_hosp: str = Field(foreign_key="hospital.nome_hosp")
     num_func: int = Field(foreign_key="funcionario_hospital.num_func")
+    diagnostico: Optional[str] = None
+    notas_clinicas: Optional[str] = None
+    exame_fisico: Optional[str] = None
+    decisao_clinica: Optional[str] = None # Alta / Internamento / Exames / Outro
 
 class Envolve(SQLModel, table=True):
     __tablename__ = "Envolve"
@@ -135,3 +142,4 @@ class Internamento(SQLModel, table=True):
     num_cama: Optional[int] = None
     data_h_entrada: datetime = Field(default_factory=datetime.now)
     data_h_saida: Optional[datetime] = None
+    num_func_medico: Optional[int] = Field(default=None, foreign_key="medico.num_func")

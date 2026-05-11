@@ -4,11 +4,13 @@
 CREATE TABLE utente ( 
     num_utente INT PRIMARY KEY, 
     nome VARCHAR(255) NOT NULL,
+    email VARCHAR(255),
     telemovel VARCHAR(20),
     morada VARCHAR(255),
     sexo VARCHAR(12),
     localidade VARCHAR(100),
-    data_nasc DATE 
+    data_nasc DATE,
+    parentesco VARCHAR(100)
 );
 
 CREATE TABLE hospital (  
@@ -25,6 +27,7 @@ CREATE TABLE funcionario_hospital (
 CREATE TABLE medico ( 
     num_func INT PRIMARY KEY,
     estagiario VARCHAR(10),
+    especialidade VARCHAR(255),
     FOREIGN KEY (num_func) REFERENCES funcionario_hospital(num_func)
 );
 
@@ -59,8 +62,12 @@ CREATE TABLE episodio_urgencia (
     data_h_saida TIMESTAMP, -- Nullable until discharge
     id_utente INT NOT NULL,
     id_hosp VARCHAR(100) NOT NULL,
+    sintomas TEXT,
+    observacoes TEXT,
+    id_utilizador_rececao INT,
     FOREIGN KEY (id_utente) REFERENCES utente (num_utente),
-    FOREIGN KEY (id_hosp) REFERENCES hospital (nome_hosp)
+    FOREIGN KEY (id_hosp) REFERENCES hospital (nome_hosp),
+    FOREIGN KEY (id_utilizador_rececao) REFERENCES utilizador(id_utilizador)
 ); 
 
 CREATE TABLE triagem (
@@ -82,6 +89,10 @@ CREATE TABLE ato (
     cod_epis VARCHAR(50) NOT NULL,
     id_hosp VARCHAR (100) NOT NULL,
     num_func INT NOT NULL,
+    diagnostico TEXT,
+    notas_clinicas TEXT,
+    exame_fisico TEXT,
+    decisao_clinica VARCHAR(50),
     FOREIGN KEY (cod_epis) REFERENCES episodio_urgencia(cod_epis),
     FOREIGN KEY (id_hosp) REFERENCES hospital (nome_hosp),
     FOREIGN KEY (num_func) REFERENCES funcionario_hospital(num_func)
@@ -125,8 +136,10 @@ CREATE TABLE internamento (
     num_cama INT,
     data_h_entrada TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     data_h_saida TIMESTAMP,
+    num_func_medico INT,
     FOREIGN KEY (cod_epis) REFERENCES episodio_urgencia(cod_epis),
-    FOREIGN KEY (id_servico) REFERENCES servico_hospitalar(id)
+    FOREIGN KEY (id_servico) REFERENCES servico_hospitalar(id),
+    FOREIGN KEY (num_func_medico) REFERENCES medico(num_func)
 );
 
 -- 5. Privacy & Anonymization

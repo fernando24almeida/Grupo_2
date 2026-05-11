@@ -1,7 +1,7 @@
 from sqlmodel import create_engine, Session, SQLModel, select
 from datetime import date
 from .config import configuracoes
-from ..models.models import PapelUtilizador, Utilizador, Hospital, Utente, FuncionarioHospital, Enfermeiro, Medico
+from ..models.models import PapelUtilizador, Utilizador, Hospital, Utente, FuncionarioHospital, Enfermeiro, Medico, ServicoHospitalar
 from .security import obter_hash_palavra_passe
 import logging
 
@@ -31,12 +31,43 @@ def obter_sessao():
 
 def inicializar_bd():
     try:
-        # Tenta criar as tabelas
+        # 1. Tenta criar as tabelas base
         SQLModel.metadata.create_all(motor)
-        print("[SUCCESS] Base de dados inicializada com sucesso.")
+        
+        # 2. Migrações automáticas (Self-healing)
+        # Adiciona colunas que podem estar em falta em instalações existentes
+        from sqlalchemy import text
+        colunas_necessarias = [
+            ("utente", "parentesco", "VARCHAR(100)"),
+            ("episodio_urgencia", "id_utilizador_rececao", "INT REFERENCES utilizador(id_utilizador)"),
+            ("ato", "diagnostico", "TEXT"),
+            ("ato", "notas_clinicas", "TEXT"),
+            ("ato", "exame_fisico", "TEXT"),
+            ("ato", "decisao_clinica", "VARCHAR(50)"),
+            ("internamento", "num_func_medico", "INT REFERENCES medico(num_func)")
+        ]
+        
+        with motor.connect() as conn:
+            for tabela, coluna, tipo in colunas_necessarias:
+                try:
+                    # Verificar se a coluna existe
+                    check = conn.execute(text(f"SELECT count(*) FROM information_schema.columns WHERE table_name='{tabela}' AND column_name='{coluna}';")).scalar()
+                    if check == 0:
+                        print(f"[MIGRATE] Adicionando coluna '{coluna}' à tabela '{tabela}'...")
+                        conn.execute(text(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo};"))
+                        conn.commit()
+                except Exception as me:
+                    print(f"[MIGRATE ERROR] Falha ao adicionar {tabela}.{coluna}: {me}")
+            
+            # Remover unique do email se existir
+            try:
+                conn.execute(text("ALTER TABLE utente DROP CONSTRAINT IF EXISTS utente_email_key;"))
+                conn.commit()
+            except: pass
+
+        print("[SUCCESS] Base de dados inicializada e migrada com sucesso.")
     except Exception as e:
         print(f"[ERROR] Erro ao ligar à base de dados: {e}")
-        print(f"[HINT] DICA: Verifique se a DATABASE_URL está correta no Render.")
         raise e
     
     with Session(motor) as sessao:
@@ -85,6 +116,30 @@ def inicializar_bd():
                 PapelUtilizador(nome="TECNICO")
             ]
             sessao.add_all(papeis)
+            sessao.commit()
+            
+        # Check if services exist
+        servicos_existentes = sessao.exec(select(ServicoHospitalar)).first()
+        if not servicos_existentes:
+            hosp_nome = "Hospital Central de Urgências"
+            servicos = [
+                ServicoHospitalar(nome="Medicina Interna", id_hosp=hosp_nome),
+                ServicoHospitalar(nome="Cirurgia Geral", id_hosp=hosp_nome),
+                ServicoHospitalar(nome="Ortopedia", id_hosp=hosp_nome),
+                ServicoHospitalar(nome="Cardiologia", id_hosp=hosp_nome),
+                ServicoHospitalar(nome="Pediatria", id_hosp=hosp_nome)
+            ]
+            sessao.add_all(servicos)
+            
+            # Adicionar também para o hospital de teste se existir
+            hosp_teste = sessao.exec(select(Hospital).where(Hospital.nome_hosp == "Centro Hospitalar TESTE")).first()
+            if hosp_teste:
+                servicos_teste = [
+                    ServicoHospitalar(nome="Unidade de Cuidados Intensivos", id_hosp=hosp_teste.nome_hosp),
+                    ServicoHospitalar(nome="Neurologia", id_hosp=hosp_teste.nome_hosp)
+                ]
+                sessao.add_all(servicos_teste)
+            
             sessao.commit()
             
         # Create initial staff for testing

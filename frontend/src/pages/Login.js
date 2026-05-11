@@ -24,9 +24,6 @@ const Login = () => {
       // Se for a primeira vez (setup), temos de ativar o MFA antes de validar o login final
       if (mfaSetup) {
           try {
-            // Chamada direta para ativar o MFA usando o código de 6 dígitos
-            // Nota: Para segurança máxima, isto deve ser feito com o username
-            // Mas o nosso backend já valida o código contra o segredo gerado
             const sucesso = await validarMFA(nomeUtilizador, mfaCode);
             if (sucesso) navigate('/dashboard');
             else setError('Código de ativação inválido.');
@@ -36,9 +33,16 @@ const Login = () => {
           return;
       }
 
-      const sucesso = await validarMFA(nomeUtilizador, mfaCode);
-      if (sucesso) navigate('/dashboard');
-      else setError('Código MFA inválido.');
+      const resultadoMFA = await validarMFA(nomeUtilizador, mfaCode);
+      if (resultadoMFA.sucesso) {
+        if (resultadoMFA.role === 'ADMIN') {
+          navigate('/dashboard');
+        } else {
+          navigate('/select-hospital');
+        }
+      } else {
+        setError('Código MFA inválido.');
+      }
       return;
     }
 
@@ -69,7 +73,12 @@ const Login = () => {
         setSecret(resultado.secret);
       }
     } else if (resultado.sucesso) {
-      navigate('/dashboard');
+      // Redirecionar para seleção de hospital se for profissional de saúde
+      if (resultado.role === 'ADMIN') {
+        navigate('/dashboard');
+      } else {
+        navigate('/select-hospital');
+      }
     } else {
       setError(resultado.erro || 'Falha no login.');
     }

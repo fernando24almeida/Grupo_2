@@ -13,7 +13,7 @@ from pydantic import BaseModel, EmailStr, ConfigDict
 from typing import Optional, List
 from ..core.db import obter_sessao
 from ..core.security import verificar_palavra_passe, criar_token_acesso, obter_hash_palavra_passe, RoleChecker, obter_utilizador_atual
-from ..models.models import Utilizador, PapelUtilizador, FuncionarioHospital, Medico, Enfermeiro, EmailValidation, PasswordReset
+from ..models.models import Utilizador, PapelUtilizador, FuncionarioHospital, Medico, Enfermeiro, EmailValidation, PasswordReset, AuditLog
 from ..core.audit import log_audit
 from ..core.email import enviar_email_ativacao, enviar_email_recuperacao_username, enviar_email_recuperacao_password
 
@@ -21,6 +21,17 @@ router = APIRouter()
 admin_only = RoleChecker(["ADMIN"])
 
 # --- SCHEMAS ---
+class LerAuditLog(BaseModel):
+    id: int
+    id_utilizador: Optional[int]
+    acao: str
+    recurso: str
+    id_recurso: Optional[str]
+    detalhes: Optional[str]
+    ip_origem: Optional[str]
+    data_hora: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 class LoginMFA(BaseModel):
     username: str
     mfa_code: str
@@ -73,6 +84,9 @@ class LerUtilizador(BaseModel):
     id_role: int # Uniformizado - RESOLVE O ERRO DE VALIDAÇÃO
     num_func: Optional[int] = None
     ativo: bool
+    mfa_ativo: bool = False
+    estagiario: Optional[str] = None
+    especialidade: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -81,6 +95,7 @@ class CriarProfissional(BaseModel):
     sexo: str
     tipo_func: str
     estagiario: Optional[str] = None
+    especialidade: Optional[str] = None
 
 # --- AUTENTICAÇÃO ---
 @router.post("/login")
@@ -99,6 +114,7 @@ def entrar(request: Request, dados_form: OAuth2PasswordRequestForm = Depends(), 
         papel = sessao.get(PapelUtilizador, utilizador.id_role)
         if papel and papel.nome == "ADMIN":
             token_acesso = criar_token_acesso(dados={"sub": utilizador.nome_utilizador, "role": papel.nome})
+            print(f"DEBUG: Login ADMIN bem-sucedido para {utilizador.nome_utilizador}. Token gerado.")
             return {"access_token": token_acesso, "token_type": "bearer", "role": papel.nome}
             
         if not utilizador.mfa_secret:
@@ -299,12 +315,28 @@ def criar_utilizador(request: Request, utilizador_in: CriarUtilizador, backgroun
         raise HTTPException(status_code=400, detail="Username ou e-mail já existe.")
 
 @router.get("/users/me", response_model=LerUtilizador)
-def obter_perfil_atual(utilizador_atual: Utilizador = Depends(obter_utilizador_atual)):
-    return utilizador_atual
+def obter_perfil_atual(utilizador_atual: Utilizador = Depends(obter_utilizador_atual), sessao: Session = Depends(obter_sessao)):
+    user_data = LerUtilizador.model_validate(utilizador_atual)
+    if utilizador_atual.num_func:
+        medico = sessao.get(Medico, utilizador_atual.num_func)
+        if medico:
+            user_data.estagiario = medico.estagiario
+            user_data.especialidade = medico.especialidade
+    return user_data
 
 @router.get("/users", response_model=List[LerUtilizador], dependencies=[Depends(admin_only)])
 def listar_utilizadores(sessao: Session = Depends(obter_sessao)):
-    return sessao.exec(select(Utilizador)).all()
+    utilizadores = sessao.exec(select(Utilizador)).all()
+    resultado = []
+    for u in utilizadores:
+        user_data = LerUtilizador.model_validate(u)
+        if u.num_func:
+            medico = sessao.get(Medico, u.num_func)
+            if medico:
+                user_data.estagiario = medico.estagiario
+                user_data.especialidade = medico.especialidade
+        resultado.append(user_data)
+    return resultado
 
 @router.patch("/users/me", response_model=LerUtilizador)
 def atualizar_proprio_perfil(dados: AtualizarUtilizador, utilizador_atual: Utilizador = Depends(obter_utilizador_atual), sessao: Session = Depends(obter_sessao)):
@@ -316,6 +348,15 @@ def atualizar_proprio_perfil(dados: AtualizarUtilizador, utilizador_atual: Utili
     if dados.nome_completo: utilizador_atual.nome_completo = dados.nome_completo
     if dados.email: utilizador_atual.email = dados.email.lower().strip()
     if dados.telemovel: utilizador_atual.telemovel = dados.telemovel
+
+    # Se for médico, permitir atualizar dados profissionais
+    if utilizador_atual.num_func:
+        medico = sessao.get(Medico, utilizador_atual.num_func)
+        if medico:
+            if dados.estagiario is not None: medico.estagiario = dados.estagiario
+            if dados.especialidade is not None: medico.especialidade = dados.especialidade
+            sessao.add(medico)
+
     if dados.palavra_passe:
         try:
             CriarUtilizador.validar_password(dados.palavra_passe)
@@ -347,10 +388,26 @@ def atualizar_utilizador_admin(id_utilizador: int, dados: AtualizarUtilizador, s
             raise HTTPException(status_code=400, detail=str(e))
         utilizador.hash_palavra_passe = obter_hash_palavra_passe(dados.palavra_passe)
 
+    # Atualizar dados de Médico se aplicável
+    if utilizador.num_func:
+        medico = sessao.get(Medico, utilizador.num_func)
+        if medico:
+            if dados.estagiario: medico.estagiario = dados.estagiario
+            if dados.especialidade: medico.especialidade = dados.especialidade
+            sessao.add(medico)
+
     sessao.add(utilizador)
     sessao.commit()
     sessao.refresh(utilizador)
-    return utilizador
+    
+    # Retornar com os dados atualizados de médico
+    user_data = LerUtilizador.model_validate(utilizador)
+    if utilizador.num_func:
+        medico = sessao.get(Medico, utilizador.num_func)
+        if medico:
+            user_data.estagiario = medico.estagiario
+            user_data.especialidade = medico.especialidade
+    return user_data
 
 @router.delete("/users/{id_utilizador}", dependencies=[Depends(admin_only)])
 def eliminar_utilizador(id_utilizador: int, sessao: Session = Depends(obter_sessao)):
@@ -386,6 +443,37 @@ def alternar_estado_utilizador(id_utilizador: int, sessao: Session = Depends(obt
     
     return {"message": f"Utilizador {'reativado' if utilizador.ativo else 'suspenso'} com sucesso."}
 
+@router.post("/users/{id_utilizador}/resend-activation", dependencies=[Depends(admin_only)])
+async def reenviar_ativacao_utilizador(id_utilizador: int, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao), admin: Utilizador = Depends(obter_utilizador_atual)):
+    utilizador = sessao.get(Utilizador, id_utilizador)
+    if not utilizador:
+        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
+    
+    if utilizador.ativo:
+        raise HTTPException(status_code=400, detail="Este utilizador já tem a conta ativa.")
+
+    codigo = f"{random.randint(100000, 999999)}"
+    
+    try:
+        validacao = EmailValidation(
+            email=utilizador.email, 
+            codigo=codigo, 
+            expira_em=datetime.now() + timedelta(hours=24)
+        )
+        sessao.add(validacao)
+        sessao.commit()
+        
+        background_tasks.add_task(enviar_email_ativacao, utilizador.email, utilizador.nome_completo, codigo)
+        
+        log_audit(sessao, admin.id_utilizador, "RESEND_ACTIVATION", "utilizador", str(id_utilizador), f"Novo código de ativação enviado para {utilizador.email}")
+        
+        print(f"\n📧 [DEBUG REENVIO] Utilizador {utilizador.id_utilizador} | Novo Código: {codigo}\n")
+        
+        return {"message": "Novo código de ativação enviado com sucesso."}
+    except Exception as e:
+        sessao.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro ao processar reenvio: {str(e)}")
+
 @router.post("/professionals", dependencies=[Depends(admin_only)])
 def criar_profissional(profissional: CriarProfissional, sessao: Session = Depends(obter_sessao)):
     # 1. Verificar se o funcionário já existe na tabela base
@@ -407,7 +495,11 @@ def criar_profissional(profissional: CriarProfissional, sessao: Session = Depend
         
         # 3. Criar registro nas tabelas específicas
         if profissional.tipo_func == 'MEDICO':
-            db_medico = Medico(num_func=profissional.num_func, estagiario=profissional.estagiario)
+            db_medico = Medico(
+                num_func=profissional.num_func, 
+                estagiario=profissional.estagiario,
+                especialidade=profissional.especialidade
+            )
             sessao.add(db_medico)
         elif profissional.tipo_func == 'ENFERMEIRO':
             db_enfermeiro = Enfermeiro(num_func=profissional.num_func)
@@ -437,3 +529,7 @@ def obter_profissional(num_func: int, sessao: Session = Depends(obter_sessao)):
         "tipo_func": funcionario.tipo_func,
         "id_role": papel.id_role if papel else None
     }
+
+@router.get("/audit", response_model=List[LerAuditLog], dependencies=[Depends(admin_only)])
+def listar_audit_logs(sessao: Session = Depends(obter_sessao)):
+    return sessao.exec(select(AuditLog).order_by(AuditLog.data_hora.desc()).limit(100)).all()

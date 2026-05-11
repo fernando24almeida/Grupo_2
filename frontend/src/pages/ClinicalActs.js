@@ -3,34 +3,61 @@ import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { usarAutenticacao } from '../services/AuthContext';
 import { 
-  Clipboard, User, HeartPulse, Thermometer, 
-  Clock, CheckCircle, AlertCircle, ArrowRight,
-  FileText, Activity
+  Clipboard, HeartPulse, Thermometer, 
+  Clock, CheckCircle, ArrowRight,
+  Activity, Hotel
 } from 'lucide-react';
 
 const ClinicalActs = () => {
   const { utilizador } = usarAutenticacao();
   const navigate = useNavigate();
+  const [activeMode, setActiveMode] = useState('urgencia'); // 'urgencia' ou 'internamento'
   const [activeTab, setActiveTab] = useState('treatment');
   const [queue, setQueue] = useState([]);
-  const [hospitals, setHospitals] = useState([]);
-  const [selectedHospital, setSelectedHospital] = useState(utilizador?.hospital || '');
+  const [internments, setInternments] = useState([]);
   const [selectedEpisode, setSelectedEpisode] = useState(null);
+  const [isHospitalizedPatient, setIsHospitalizedPatient] = useState(false);
   const [history, setHistory] = useState([]);
   const [prescriptions, setPrescriptions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
-  const [atoData, setAtoData] = useState({ tipo: 'CONSULTA', data_h_inicio: new Date().toISOString().slice(0, 16) });
+  const [hospitals, setHospitals] = useState([]);
+  const [selectedHospital, setSelectedHospital] = useState(utilizador?.hospital || '');
+  
+  const [atoData, setAtoData] = useState({ 
+    tipo: 'CONSULTA', 
+    data_h_inicio: new Date().toISOString().slice(0, 16),
+    diagnostico: '',
+    exame_fisico: '',
+    notas_clinicas: '',
+    decisao_clinica: 'CONTINUAR'
+  });
   const [prescData, setPrescData] = useState({ medicamento: '', dosagem: '' });
   
-  // Carregar Hospitais e Fila
+  const [services, setServices] = useState([]);
+  const [internData, setInternData] = useState({ id_servico: '', num_cama: '' });
+
+  const handleModeChange = (mode) => {
+    setActiveMode(mode);
+    setSelectedEpisode(null);
+    setIsHospitalizedPatient(mode === 'internamento');
+    setMessage(null);
+  };
+
+  useEffect(() => {
+    if (utilizador?.hospital) {
+      setSelectedHospital(utilizador.hospital);
+    }
+  }, [utilizador?.hospital]);
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         const resHosp = await axios.get('/clinical/hospitals');
         setHospitals(resHosp.data);
         if (resHosp.data.length > 0 && !selectedHospital) {
-          setSelectedHospital(resHosp.data[0].nome_hosp);
+          const exists = resHosp.data.find(h => h.nome_hosp === utilizador?.hospital);
+          setSelectedHospital(exists ? utilizador.hospital : resHosp.data[0].nome_hosp);
         }
       } catch (e) { console.error(e); }
     };
@@ -40,23 +67,40 @@ const ClinicalActs = () => {
   const fetchQueue = async () => {
     if (!selectedHospital) return;
     try {
-      const res = await axios.get('/clinical/episodes/awaiting-doctor', { 
-        params: { id_hospital: selectedHospital } 
-      });
-      setQueue(res.data);
-    } catch (error) { console.error('Erro ao carregar fila', error); }
+      const [resQueue, resIntern] = await Promise.all([
+        axios.get('/clinical/episodes/awaiting-doctor', { params: { id_hospital: selectedHospital } }),
+        axios.get('/clinical/internamentos', { params: { id_hospital: selectedHospital } })
+      ]);
+      setQueue(resQueue.data);
+      setInternments(resIntern.data);
+    } catch (error) { console.error('Erro ao carregar dados', error); }
     finally { setLoading(false); }
   };
 
-  useEffect(() => { fetchQueue(); }, [selectedHospital]);
+  useEffect(() => { 
+    fetchQueue();
+    if (selectedHospital) {
+      axios.get(`/clinical/hospitals/${selectedHospital}/services`)
+        .then(res => setServices(res.data))
+        .catch(err => console.error('Erro ao buscar serviços', err));
+    }
+  }, [selectedHospital]);
 
-  const handleSelectPatient = async (cod) => {
+  const handleSelectPatient = async (cod, isIntern = false) => {
     try {
       const res = await axios.get(`/clinical/episodes/${cod}`);
       setSelectedEpisode(res.data);
-      setAtoData({ tipo: 'CONSULTA', data_h_inicio: new Date().toISOString().slice(0, 16) });
+      setIsHospitalizedPatient(isIntern);
       
-      // Carregar histórico e prescrições do paciente selecionado
+      setAtoData({ 
+        tipo: 'CONSULTA', 
+        data_h_inicio: new Date().toISOString().slice(0, 16),
+        diagnostico: '',
+        exame_fisico: '',
+        notas_clinicas: '',
+        decisao_clinica: 'CONTINUAR'
+      });
+      
       const [histRes, prescRes] = await Promise.all([
         axios.get(`/clinical/utentes/${res.data.id_utente}/history`),
         axios.get(`/clinical/episodes/${cod}/prescriptions`)
@@ -76,8 +120,35 @@ const ClinicalActs = () => {
         id_hosp: selectedEpisode.id_hospital,
         num_func: utilizador?.num_func || 1002
       });
-      setMessage({ type: 'success', text: 'Ato clínico registado!' });
-    } catch (error) { setMessage({ type: 'error', text: 'Erro ao registar ato.' }); }
+
+      if (atoData.decisao_clinica === 'INTERNAMENTO' && !isHospitalizedPatient) {
+        if (!internData.id_servico) {
+          alert('Por favor, selecione o serviço para internamento.');
+          return;
+        }
+        await axios.post('/clinical/internamentos', {
+          cod_epis: selectedEpisode.cod_epis,
+          id_servico: parseInt(internData.id_servico),
+          num_cama: internData.num_cama ? parseInt(internData.num_cama) : null,
+          data_h_entrada: new Date().toISOString(),
+          num_func_medico: utilizador?.num_func || 1002
+        });
+        setMessage({ type: 'success', text: 'Paciente internado com sucesso!' });
+      } else if (atoData.decisao_clinica === 'ALTA') {
+        if (isHospitalizedPatient) {
+          const currentIntern = internments.find(i => i.cod_epis === selectedEpisode.cod_epis);
+          if (currentIntern) {
+            await axios.post(`/clinical/internamentos/${currentIntern.num_internamento}/discharge`);
+          }
+        }
+        setMessage({ type: 'success', text: 'Alta concedida e episódio finalizado!' });
+      } else {
+        setMessage({ type: 'success', text: 'Registro clínico guardado!' });
+      }
+      
+      setSelectedEpisode(null);
+      fetchQueue();
+    } catch (error) { setMessage({ type: 'error', text: 'Erro ao processar decisão clínica.' }); }
   };
 
   const handleAddPrescription = async (e) => {
@@ -95,16 +166,6 @@ const ClinicalActs = () => {
     } catch (error) { setMessage({ type: 'error', text: 'Erro ao prescrever.' }); }
   };
 
-  const handleDischarge = async () => {
-    if (!window.confirm('Dar alta ao paciente?')) return;
-    try {
-      await axios.post(`/clinical/episodes/${selectedEpisode.cod_epis}/discharge`);
-      setSelectedEpisode(null);
-      fetchQueue();
-      setMessage({ type: 'success', text: 'Paciente teve alta.' });
-    } catch (error) { setMessage({ type: 'error', text: 'Erro ao dar alta.' }); }
-  };
-
   if (loading) return <div className="loading-container">Carregando prontuário...</div>;
 
   return (
@@ -114,6 +175,22 @@ const ClinicalActs = () => {
           <Clipboard size={28} className="icon-blue" />
           <h1>Atendimento Clínico</h1>
         </div>
+        
+        <div className="mode-toggle-group">
+          <button 
+            className={`mode-btn ${activeMode === 'urgencia' ? 'active urgencia' : ''}`} 
+            onClick={() => handleModeChange('urgencia')}
+          >
+            <Activity size={18} /> Urgências
+          </button>
+          <button 
+            className={`mode-btn ${activeMode === 'internamento' ? 'active internamento' : ''}`} 
+            onClick={() => handleModeChange('internamento')}
+          >
+            <Hotel size={18} /> Internamentos
+          </button>
+        </div>
+
         <button className="btn-secondary" onClick={() => navigate('/dashboard')}>Sair</button>
       </header>
 
@@ -124,6 +201,7 @@ const ClinicalActs = () => {
             className="form-select" 
             value={selectedHospital} 
             onChange={(e) => setSelectedHospital(e.target.value)}
+            disabled={utilizador?.role === 'MEDICO'}
           >
             <option value="">Selecione...</option>
             {hospitals.map(h => (
@@ -134,105 +212,178 @@ const ClinicalActs = () => {
       </div>
 
       <div className="clinical-grid">
-        {/* FILA MÉDICA */}
         <div className="medical-sidebar">
-          <div className="card shadow-sm">
-            <div className="card-header bg-light d-flex justify-content-between">
-              <h3 className="h6 mb-0">Pacientes Triados</h3>
-              <span className="badge bg-primary">{queue.length}</span>
-            </div>
-            <div className="queue-list">
-              {queue.length === 0 ? <p className="p-3 text-center text-muted">Fila vazia</p> : 
-                queue.map((ep) => (
-                  <div key={ep.cod_epis} className={`queue-item priority-border-${ep.prioridade.toLowerCase()} ${selectedEpisode?.cod_epis === ep.cod_epis ? 'active' : ''}`} onClick={() => handleSelectPatient(ep.cod_epis)}>
-                    <div className="patient-meta">
-                      <strong>{ep.utente_nome}</strong>
-                      <small className={`text-${ep.prioridade.toLowerCase()}`}>{ep.prioridade}</small>
+          {activeMode === 'urgencia' ? (
+            <div className="sidebar-section urgencia animate-fade-in">
+              <div className="section-header">
+                <h3>Fila de Urgência</h3>
+                <span className="count">{queue.length}</span>
+              </div>
+              <div className="queue-list">
+                {queue.length === 0 ? <p className="empty-msg">Fila vazia</p> : 
+                  queue.map((ep) => (
+                    <div key={ep.cod_epis} className={`queue-item priority-${ep.prioridade.toLowerCase()} ${selectedEpisode?.cod_epis === ep.cod_epis ? 'active' : ''}`} onClick={() => handleSelectPatient(ep.cod_epis, false)}>
+                      <div className="patient-meta">
+                        <strong>{ep.utente_nome}</strong>
+                        <small>{ep.prioridade}</small>
+                      </div>
+                      <ArrowRight size={16} />
                     </div>
-                    <ArrowRight size={16} />
-                  </div>
-                ))
-              }
+                  ))
+                }
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="sidebar-section internamento animate-fade-in">
+              <div className="section-header">
+                <h3>Pacientes Internados</h3>
+                <span className="count">{internments.length}</span>
+              </div>
+              <div className="queue-list">
+                {internments.length === 0 ? <p className="empty-msg">Nenhum internado</p> : 
+                  internments.map((int) => (
+                    <div key={int.cod_epis} className={`queue-item intern ${selectedEpisode?.cod_epis === int.cod_epis ? 'active' : ''}`} onClick={() => handleSelectPatient(int.cod_epis, true)}>
+                      <div className="patient-meta">
+                        <strong>{int.utente_nome}</strong>
+                        <small>{int.servico_nome} - Cama {int.num_cama || 'N/A'}</small>
+                      </div>
+                      <Hotel size={16} />
+                    </div>
+                  ))
+                }
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* ÁREA DE TRABALHO */}
         <div className="medical-main">
           {message && <div className={`alert alert-${message.type === 'success' ? 'success' : 'danger'} mb-3`}>{message.text}</div>}
 
           {selectedEpisode ? (
             <div className="workspace">
-              {/* CABEÇALHO DO PACIENTE */}
-              <div className="patient-banner card mb-4">
-                <div className="d-flex justify-content-between align-items-center p-3">
-                  <div className="d-flex align-items-center gap-3">
-                    <div className="avatar-med">{selectedEpisode.utente?.nome?.charAt(0)}</div>
-                    <div>
-                      <h2 className="h4 mb-0">{selectedEpisode.utente?.nome}</h2>
-                      <small className="text-muted">NIF/Utente: {selectedEpisode.id_utente} | Episódio: {selectedEpisode.cod_epis}</small>
-                    </div>
-                  </div>
-                  <div className={`vitals-summary priority-bg-${selectedEpisode.triagem?.prioridade.toLowerCase()}`}>
-                    <span>{selectedEpisode.triagem?.tensao_arterial} mmHg</span>
-                    <span>{selectedEpisode.triagem?.temperatura} ºC</span>
+              <div className={`patient-banner ${activeMode === 'internamento' ? 'intern-theme' : 'urg-theme'}`}>
+                <div className="banner-info">
+                  <div className="avatar">{selectedEpisode.utente?.nome?.charAt(0)}</div>
+                  <div className="details">
+                    <h2>{selectedEpisode.utente?.nome} {isHospitalizedPatient && <span className="intern-badge">INTERNADO</span>}</h2>
+                    <p>Utente: {selectedEpisode.id_utente} | Episódio: {selectedEpisode.cod_epis}</p>
                   </div>
                 </div>
-                
-                {/* TABS NAVEGAÇÃO */}
-                <div className="tab-nav">
-                  <button className={activeTab === 'treatment' ? 'active' : ''} onClick={() => setActiveTab('treatment')}>Atendimento</button>
-                  <button className={activeTab === 'prescriptions' ? 'active' : ''} onClick={() => setActiveTab('prescriptions')}>Prescrições ({prescriptions.length})</button>
-                  <button className={activeTab === 'history' ? 'active' : ''} onClick={() => setActiveTab('history')}>Histórico Clínico</button>
+                <div className="vitals">
+                  {isHospitalizedPatient ? (
+                    <div className="intern-info">
+                      <Hotel size={16} /> <span>{internments.find(i => i.cod_epis === selectedEpisode.cod_epis)?.servico_nome}</span>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="vital-item"><HeartPulse size={16} /> {selectedEpisode.triagem?.tensao_arterial}</div>
+                      <div className="vital-item"><Thermometer size={16} /> {selectedEpisode.triagem?.temperatura}ºC</div>
+                    </>
+                  )}
                 </div>
               </div>
+                
+              <div className="tab-nav">
+                <button className={activeTab === 'treatment' ? 'active' : ''} onClick={() => setActiveTab('treatment')}>Evolução / Atendimento</button>
+                <button className={activeTab === 'prescriptions' ? 'active' : ''} onClick={() => setActiveTab('prescriptions')}>Prescrições ({prescriptions.length})</button>
+                <button className={activeTab === 'history' ? 'active' : ''} onClick={() => setActiveTab('history')}>Histórico Clínico</button>
+              </div>
 
-              {/* CONTEÚDO DAS TABS */}
               <div className="tab-content">
                 {activeTab === 'treatment' && (
-                  <section className="card shadow-sm p-4">
-                    <div className="sintomas-box mb-4">
-                      <h6>Sintomas na Admissão:</h6>
+                  <section className="card-form shadow-sm">
+                    <div className={`sintomas-box ${activeMode === 'internamento' ? 'intern' : ''}`}>
+                      <h6>{activeMode === 'urgencia' ? 'Sintomas na Admissão:' : 'Motivo do Internamento:'}</h6>
                       <p>{selectedEpisode.triagem?.sintomas || 'Não descritos.'}</p>
                     </div>
-                    <form onSubmit={handleSubmitAto}>
-                      <div className="row">
-                        <div className="col-md-6 mb-3">
+                    
+                    <form onSubmit={handleSubmitAto} className="p-4">
+                      <div className="row mb-3">
+                        <div className="col-md-6">
                           <label className="form-label">Tipo de Ato</label>
                           <select className="form-select" value={atoData.tipo} onChange={e => setAtoData({...atoData, tipo: e.target.value})}>
-                            <option value="CONSULTA">Consulta Médica</option>
+                            <option value="CONSULTA">{activeMode === 'internamento' ? 'Consulta de Evolução' : 'Consulta Médica'}</option>
                             <option value="EXAME">Exame de Diagnóstico</option>
                             <option value="INTERVENCAO">Intervenção</option>
+                            <option value="TRATAMENTO">Tratamento / Medicação</option>
                           </select>
                         </div>
-                        <div className="col-md-6 mb-3">
+                        <div className="col-md-6">
                           <label className="form-label">Data/Hora</label>
                           <input type="datetime-local" className="form-control" value={atoData.data_h_inicio} onChange={e => setAtoData({...atoData, data_h_inicio: e.target.value})} required />
                         </div>
                       </div>
-                      <div className="d-flex gap-2 mt-3">
-                        <button type="submit" className="btn btn-primary px-4">Gravar Ato Clínico</button>
-                        <button type="button" className="btn btn-success px-4" onClick={handleDischarge}>Finalizar Urgência (Alta)</button>
+
+                      <div className="mb-3">
+                        <label className="form-label">Exame Físico / Sinais Atuais</label>
+                        <textarea className="form-control" rows="2" value={atoData.exame_fisico} onChange={e => setAtoData({...atoData, exame_fisico: e.target.value})} />
                       </div>
+
+                      <div className="mb-3">
+                        <label className="form-label">Notas Clínicas / Evolução</label>
+                        <textarea className="form-control" rows="3" value={atoData.notas_clinicas} onChange={e => setAtoData({...atoData, notas_clinicas: e.target.value})} />
+                      </div>
+
+                      <div className="mb-4">
+                        <label className="form-label">Diagnóstico</label>
+                        <input type="text" className="form-control" value={atoData.diagnostico} onChange={e => setAtoData({...atoData, diagnostico: e.target.value})} />
+                      </div>
+
+                      <div className={`decision-box ${activeMode === 'internamento' ? 'intern' : 'urg'}`}>
+                        <label className="fw-bold d-block mb-2">Decisão Clínica:</label>
+                        <select 
+                          className="form-select"
+                          value={atoData.decisao_clinica} 
+                          onChange={e => setAtoData({...atoData, decisao_clinica: e.target.value})}
+                        >
+                          <option value="CONTINUAR">Manter {isHospitalizedPatient ? 'Internamento' : 'em Observação'} / Continuar</option>
+                          <option value="ALTA">{isHospitalizedPatient ? 'Alta do Internamento (Finalizar Episódio)' : 'Alta Médica (Finalizar Episódio)'}</option>
+                          {!isHospitalizedPatient && <option value="INTERNAMENTO">Mover para Internamento</option>}
+                        </select>
+                      </div>
+
+                      {atoData.decisao_clinica === 'INTERNAMENTO' && !isHospitalizedPatient && (
+                        <div className="intern-subform animate-fade-in">
+                          <div className="row g-3">
+                            <div className="col-md-8">
+                              <label className="form-label">Serviço de Destino</label>
+                              <select className="form-select" value={internData.id_servico} onChange={e => setInternData({...internData, id_servico: e.target.value})} required>
+                                <option value="">Selecione o Serviço...</option>
+                                {services.map(s => <option key={s.id_servico} value={s.id_servico}>{s.nome}</option>)}
+                              </select>
+                            </div>
+                            <div className="col-md-4">
+                              <label className="form-label">Nº Cama</label>
+                              <input type="number" className="form-control" value={internData.num_cama} onChange={e => setInternData({...internData, num_cama: e.target.value})} />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      <button type="submit" className={`btn-submit ${activeMode === 'internamento' ? 'intern' : 'urg'}`}>
+                        {atoData.decisao_clinica === 'ALTA' ? 'Confirmar Alta e Fechar Episódio' : 
+                         atoData.decisao_clinica === 'INTERNAMENTO' ? 'Processar Internamento' : 
+                         'Gravar Registro Clínico'}
+                      </button>
                     </form>
                   </section>
                 )}
 
                 {activeTab === 'prescriptions' && (
-                  <section className="card shadow-sm p-4">
+                  <section className="card-form shadow-sm p-4">
                     <form onSubmit={handleAddPrescription} className="mb-4 d-flex gap-3 align-items-end">
                       <div className="flex-grow-1">
                         <label className="form-label">Medicamento</label>
-                        <input type="text" className="form-control" value={prescData.medicamento} onChange={e => setPrescData({...prescData, medicamento: e.target.value})} required placeholder="Ex: Paracetamol" />
+                        <input type="text" className="form-control" value={prescData.medicamento} onChange={e => setPrescData({...prescData, medicamento: e.target.value})} required />
                       </div>
                       <div style={{ width: '200px' }}>
                         <label className="form-label">Dosagem</label>
-                        <input type="text" className="form-control" value={prescData.dosagem} onChange={e => setPrescData({...prescData, dosagem: e.target.value})} required placeholder="Ex: 1g 8/8h" />
+                        <input type="text" className="form-control" value={prescData.dosagem} onChange={e => setPrescData({...prescData, dosagem: e.target.value})} required />
                       </div>
-                      <button type="submit" className="btn btn-primary">Adicionar</button>
+                      <button type="submit" className={`btn ${activeMode === 'internamento' ? 'btn-danger' : 'btn-primary'}`}>Adicionar</button>
                     </form>
-                    <table className="table">
-                      <thead><tr><th>Medicamento</th><th>Dosagem</th><th>Data</th></tr></thead>
+                    <table className="table table-hover">
+                      <thead className="table-light"><tr><th>Medicamento</th><th>Dosagem</th><th>Data</th></tr></thead>
                       <tbody>
                         {prescriptions.map((p, i) => (
                           <tr key={i}><td>{p.medicamento}</td><td>{p.dosagem}</td><td>{new Date(p.data_h_presc).toLocaleDateString()}</td></tr>
@@ -245,15 +396,28 @@ const ClinicalActs = () => {
                 {activeTab === 'history' && (
                   <div className="history-timeline">
                     {history.map((item, i) => (
-                      <div key={i} className="timeline-item card mb-3">
-                        <div className="card-header bg-light d-flex justify-content-between">
-                          <strong>EpisódioUrgent: {item.episodio.cod_epis}</strong>
-                          <span>{new Date(item.episodio.data_h_entrada).toLocaleDateString()}</span>
+                      <div key={i} className="history-card">
+                        <div className="history-header">
+                          <strong>Episódio: {item.episodio.cod_epis}</strong>
+                          <span className="date">{new Date(item.episodio.data_h_entrada).toLocaleDateString()}</span>
                         </div>
-                        <div className="card-body py-2">
-                          <p className="mb-1"><strong>Queixa:</strong> {item.triagem?.sintomas}</p>
-                          <p className="mb-1"><strong>Prioridade:</strong> {item.triagem?.prioridade}</p>
-                          <small className="text-muted">Atos: {item.atos.map(a => a.tipo).join(', ')}</small>
+                        <div className="history-body">
+                          <div className="history-step">
+                            <span className="tag triagem">Triagem</span>
+                            <p><strong>Queixa:</strong> {item.triagem?.sintomas} | <strong>Prof:</strong> {item.triagem?.enfermeiro_nome} ({item.triagem?.enfermeiro_username})</p>
+                          </div>
+                          {item.atos?.map((ato, idx) => (
+                            <div key={idx} className="history-step">
+                              <span className="tag ato">Ato ({ato.tipo})</span>
+                              <p><strong>Diag:</strong> {ato.diagnostico || '---'} | <strong>Prof:</strong> {ato.profissional_nome} ({ato.profissional_username})</p>
+                            </div>
+                          ))}
+                          {item.internamento && (
+                            <div className="history-step">
+                              <span className="tag intern">Internamento</span>
+                              <p><strong>Médico Resp:</strong> {item.internamento.medico_nome} ({item.internamento.medico_username})</p>
+                            </div>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -262,40 +426,92 @@ const ClinicalActs = () => {
               </div>
             </div>
           ) : (
-            <div className="select-prompt-container">
-              <Activity size={64} className="text-muted mb-3 opacity-25" />
-              <h3>Aguardando Paciente</h3>
-              <p>Selecione um paciente da fila para abrir o prontuário.</p>
+            <div className="empty-workspace">
+              {activeMode === 'urgencia' ? <Activity size={80} /> : <Hotel size={80} />}
+              <h3>{activeMode === 'urgencia' ? 'Pronto para Atendimento de Urgência' : 'Pronto para Evolução em Internamento'}</h3>
+              <p>Selecione um paciente na lista lateral para iniciar.</p>
             </div>
           )}
         </div>
       </div>
 
       <style jsx>{`
-        .clinical-acts-page { padding: 1.5rem; background: #f8f9fa; min-height: 100vh; }
-        .clinical-grid { display: grid; grid-template-columns: 280px 1fr; gap: 1.5rem; }
-        .queue-item { padding: 1rem; border-bottom: 1px solid #eee; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid transparent; }
-        .queue-item.active { background: white; border-left-color: var(--primary); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-        .priority-border-vermelho { border-left-color: #dc3545; }
-        .priority-border-laranja { border-left-color: #fd7e14; }
-        .priority-border-amarelo { border-left-color: #ffc107; }
-        
-        .patient-banner { border-radius: 12px; overflow: hidden; border: none; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
-        .avatar-med { width: 45px; height: 45px; background: #e2e8f0; color: #475569; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1.2rem; }
-        .vitals-summary { display: flex; gap: 1rem; padding: 0.5rem 1rem; border-radius: 20px; font-weight: bold; font-size: 0.9rem; }
-        .priority-bg-vermelho { background: #fee2e2; color: #991b1b; }
-        .priority-bg-laranja { background: #ffedd5; color: #9a3412; }
-        .priority-bg-amarelo { background: #fef9c3; color: #854d0e; }
-        .priority-bg-verde { background: #dcfce7; color: #166534; }
-        .priority-bg-azul { background: #dbeafe; color: #1e40af; }
+        .clinical-acts-page { padding: 1.5rem; background: #f0f2f5; min-height: 100vh; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .page-header { display: flex; justify-content: space-between; align-items: center; background: white; padding: 1rem 2rem; border-radius: 12px; margin-bottom: 1.5rem; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-title { display: flex; align-items: center; gap: 12px; }
+        .header-title h1 { font-size: 1.5rem; margin: 0; color: #1e293b; }
 
-        .tab-nav { display: flex; background: #f1f5f9; padding: 4px; gap: 4px; }
-        .tab-nav button { flex: 1; padding: 10px; border: none; background: none; border-radius: 6px; cursor: pointer; font-weight: 600; color: #64748b; transition: all 0.2s; }
-        .tab-nav button.active { background: white; color: var(--primary); box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .mode-toggle-group { display: flex; background: #f1f5f9; padding: 4px; border-radius: 10px; gap: 4px; }
+        .mode-btn { border: none; padding: 8px 1.5rem; border-radius: 8px; font-weight: 600; color: #64748b; background: none; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.2s; }
+        .mode-btn.active.urgencia { background: #2563eb; color: white; box-shadow: 0 4px 6px rgba(37,99,235,0.2); }
+        .mode-btn.active.internamento { background: #dc2626; color: white; box-shadow: 0 4px 6px rgba(220,38,38,0.2); }
+
+        .clinical-grid { display: grid; grid-template-columns: 300px 1fr; gap: 1.5rem; }
         
-        .sintomas-box { background: #fdf6e3; padding: 1rem; border-radius: 8px; border: 1px solid #eee8d5; }
-        .history-timeline { max-height: 400px; overflow-y: auto; }
-        .select-prompt-container { height: 500px; display: flex; flex-direction: column; align-items: center; justify-content: center; background: white; border-radius: 1rem; border: 2px dashed #ddd; }
+        .sidebar-section { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.05); height: calc(100vh - 200px); display: flex; flex-direction: column; }
+        .section-header { padding: 1rem; color: white; display: flex; justify-content: space-between; align-items: center; }
+        .urgencia .section-header { background: #2563eb; }
+        .internamento .section-header { background: #dc2626; }
+        .count { background: rgba(255,255,255,0.2); padding: 2px 10px; border-radius: 12px; font-size: 0.85rem; font-weight: bold; }
+        
+        .queue-list { overflow-y: auto; flex: 1; }
+        .queue-item { padding: 1.25rem; border-bottom: 1px solid #f1f5f9; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: all 0.2s; border-left: 4px solid transparent; }
+        .queue-item:hover { background: #f8fafc; }
+        .queue-item.active { background: #f1f5f9; border-left-width: 6px; }
+        
+        .priority-vermelho { border-left-color: #ef4444; }
+        .priority-laranja { border-left-color: #f97316; }
+        .priority-amarelo { border-left-color: #eab308; }
+        .priority-verde { border-left-color: #22c55e; }
+        .priority-azul { border-left-color: #3b82f6; }
+        .queue-item.intern.active { border-left-color: #dc2626; }
+
+        .patient-banner { border-radius: 12px; padding: 1.5rem; color: white; display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
+        .urg-theme { background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); }
+        .intern-theme { background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%); }
+        
+        .banner-info { display: flex; align-items: center; gap: 1.5rem; }
+        .avatar { width: 50px; height: 50px; background: rgba(255,255,255,0.2); border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: bold; }
+        .details h2 { margin: 0; font-size: 1.4rem; }
+        .details p { margin: 0; opacity: 0.8; font-size: 0.9rem; }
+        .intern-badge { background: white; color: #dc2626; font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; vertical-align: middle; margin-left: 10px; font-weight: bold; }
+
+        .vitals { display: flex; gap: 1.5rem; font-weight: bold; }
+        .vital-item { display: flex; align-items: center; gap: 6px; background: rgba(255,255,255,0.1); padding: 5px 12px; border-radius: 20px; }
+
+        .tab-nav { display: flex; gap: 10px; margin-bottom: 1.5rem; border-bottom: 2px solid #e2e8f0; }
+        .tab-nav button { background: none; border: none; padding: 0.75rem 1rem; font-weight: 600; color: #64748b; cursor: pointer; position: relative; }
+        .tab-nav button.active { color: #1e293b; }
+        .tab-nav button.active::after { content: ''; position: absolute; bottom: -2px; left: 0; right: 0; height: 3px; background: #2563eb; border-radius: 3px; }
+
+        .card-form { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .sintomas-box { padding: 1rem 1.5rem; background: #fff7ed; border-left: 5px solid #f97316; }
+        .sintomas-box.intern { background: #fef2f2; border-left-color: #ef4444; }
+        .sintomas-box h6 { margin-bottom: 4px; color: #9a3412; }
+        .sintomas-box.intern h6 { color: #991b1b; }
+        
+        .decision-box { padding: 1.5rem; border-radius: 10px; margin-top: 1rem; }
+        .decision-box.urg { background: #eff6ff; border: 1px solid #bfdbfe; }
+        .decision-box.intern { background: #fef2f2; border: 1px solid #fecaca; }
+        
+        .btn-submit { width: 100%; padding: 1rem; border: none; border-radius: 10px; color: white; font-weight: bold; font-size: 1.1rem; margin-top: 1.5rem; cursor: pointer; transition: 0.2s; }
+        .btn-submit.urg { background: #2563eb; }
+        .btn-submit.intern { background: #dc2626; }
+        .btn-submit:hover { opacity: 0.9; transform: translateY(-1px); }
+
+        .empty-workspace { height: 500px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #94a3b8; }
+        
+        .history-card { background: white; border-radius: 10px; margin-bottom: 1rem; border: 1px solid #e2e8f0; overflow: hidden; }
+        .history-header { background: #f8fafc; padding: 0.75rem 1rem; display: flex; justify-content: space-between; border-bottom: 1px solid #e2e8f0; }
+        .history-body { padding: 1rem; }
+        .history-step { margin-bottom: 1rem; padding-left: 1rem; border-left: 2px solid #e2e8f0; position: relative; }
+        .tag { font-size: 0.7rem; font-weight: bold; text-transform: uppercase; padding: 2px 6px; border-radius: 4px; margin-bottom: 4px; display: inline-block; }
+        .tag.triagem { background: #fef3c7; color: #92400e; }
+        .tag.ato { background: #dbeafe; color: #1e40af; }
+        .tag.intern { background: #fee2e2; color: #991b1b; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.3s ease-out; }
       `}</style>
     </div>
   );

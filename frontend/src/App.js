@@ -17,9 +17,17 @@ import Profile from './pages/Profile';
 import './App.css';
 
 const ProtectedRoute = ({ children }) => {
-  const { utilizador } = usarAutenticacao();
+  const { utilizador, hospital } = usarAutenticacao();
 
   if (!utilizador) return <Navigate to="/login" />;
+
+  // Se for profissional de saúde e não selecionou hospital, forçar seleção
+  const isStaff = ['RECECIONISTA', 'MEDICO', 'ENFERMEIRO'].includes(utilizador.role);
+  const location = window.location.pathname;
+
+  if (isStaff && !hospital && location !== '/select-hospital') {
+    return <Navigate to="/select-hospital" />;
+  }
   
   return <Layout>{children}</Layout>;
 };

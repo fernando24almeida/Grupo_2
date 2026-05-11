@@ -48,7 +48,7 @@ export const ProvedorAutenticacao = ({ children }) => {
 
       const { access_token, role } = resposta.data;
       guardarSessao(access_token, role);
-      return { sucesso: true };
+      return { sucesso: true, role };
     } catch (erro) {
       if (erro.response?.status === 403) {
         return { sucesso: false, mfa_required: false, conta_inativa: true, erro: erro.response.data.detail };
@@ -65,7 +65,7 @@ export const ProvedorAutenticacao = ({ children }) => {
       });
       const { access_token, role } = resposta.data;
       guardarSessao(access_token, role);
-      return true;
+      return { sucesso: true, role };
     } catch (erro) {
       console.error('Falha no MFA', erro);
       return false;

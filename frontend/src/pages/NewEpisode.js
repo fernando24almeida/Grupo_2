@@ -39,6 +39,13 @@ const NewEpisode = () => {
 
   const [message, setMessage] = useState(null);
 
+  // Sincronizar hospital com a sessão
+  useEffect(() => {
+    if (utilizador?.hospital) {
+      setFormData(prev => ({ ...prev, id_hospital: utilizador.hospital }));
+    }
+  }, [utilizador?.hospital]);
+
   // Carregar Hospitais
   useEffect(() => {
     const fetchHospitals = async () => {
@@ -382,17 +389,25 @@ const NewEpisode = () => {
 
               <div className="form-group">
                 <label>Hospital de Registo:</label>
-                <select 
-                  className="form-input"
-                  value={formData.id_hospital} 
-                  onChange={(e) => setFormData({...formData, id_hospital: e.target.value})}
-                  required
-                >
-                  <option value="">Selecione um Hospital...</option>
-                  {hospitals.map(h => (
-                    <option key={h.nome_hosp} value={h.nome_hosp}>{h.nome_hosp}</option>
-                  ))}
-                </select>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                  <select 
+                    className="form-input"
+                    value={formData.id_hospital} 
+                    onChange={(e) => setFormData({...formData, id_hospital: e.target.value})}
+                    required
+                    disabled={utilizador?.role === 'RECECIONISTA'}
+                  >
+                    <option value="">Selecione um Hospital...</option>
+                    {hospitals.map(h => (
+                      <option key={h.nome_hosp} value={h.nome_hosp}>{h.nome_hosp}</option>
+                    ))}
+                  </select>
+                  {utilizador?.role === 'RECECIONISTA' && (
+                    <span style={{ fontSize: '0.8rem', color: '#718096', whiteSpace: 'nowrap' }}>
+                      (Fixo à sessão)
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div className="form-group">

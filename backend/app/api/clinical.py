@@ -1,12 +1,22 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
 from sqlmodel import Session, select, func, union_all
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timedelta, date
+import random
+import string
+
 from ..core.db import obter_sessao
-from ..models.models import Utente, EpisodioUrgencia, Triagem, Ato, Prescricao, Internamento, Hospital, Envolve, FuncionarioHospital
-from ..core.security import RoleChecker
+from ..models.models import (
+    Utente, EpisodioUrgencia, Triagem, Ato, Prescricao, Internamento, 
+    Hospital, Envolve, FuncionarioHospital, ServicoHospitalar, Utilizador, EmailValidation, AuditLog
+)
+from ..core.security import (
+    RoleChecker, obter_utilizador_atual, obter_hash_palavra_passe, 
+    verificar_palavra_passe, criar_token_acesso
+)
 from ..core.audit import log_audit
+from ..core.email import enviar_email_ativacao
 
 router = APIRouter()
 admin_only = RoleChecker(["ADMIN"])
@@ -18,6 +28,7 @@ class CriarEpisodio(BaseModel):
     data_h_entrada: Optional[datetime] = None
     sintomas: Optional[str] = None
     observacoes: Optional[str] = None
+    id_utilizador_rececao: Optional[int] = None
 
 class CriarTriagem(BaseModel):
     cod_epis: str
@@ -44,6 +55,120 @@ class AtualizarEpisodio(BaseModel):
     data_h_saida: Optional[datetime] = None
     sintomas: Optional[str] = None
     observacoes: Optional[str] = None
+
+class AtualizarEpisodioAuditado(AtualizarEpisodio):
+    justificativa: str
+    autorizacao: str
+
+class AtualizarTriagemAuditada(BaseModel):
+    prioridade: Optional[str] = None
+    tensao_arterial: Optional[str] = None
+    temperatura: Optional[float] = None
+    sintomas: Optional[str] = None
+    observacoes: Optional[str] = None
+    justificativa: str
+    autorizacao: str
+
+class AtualizarAtoAuditado(BaseModel):
+    tipo: Optional[str] = None
+    data_h_fim: Optional[datetime] = None
+    justificativa: str
+    autorizacao: str
+
+@router.patch("/episodes/{cod_epis}/audit", response_model=EpisodioUrgencia, dependencies=[Depends(admin_only)])
+def atualizar_episodio_auditado(
+    cod_epis: str, 
+    dados: AtualizarEpisodioAuditado, 
+    request: Request,
+    sessao: Session = Depends(obter_sessao),
+    admin: Utilizador = Depends(obter_utilizador_atual)
+):
+    db_episodio = sessao.get(EpisodioUrgencia, cod_epis)
+    if not db_episodio:
+        raise HTTPException(status_code=404, detail="Episódio não encontrado")
+    
+    # Registar Auditoria
+    detalhes = f"Justificativa: {dados.justificativa} | Autorização: {dados.autorizacao}"
+    log_audit(sessao, admin.id_utilizador, "UPDATE_AUDITED", "episodio_urgencia", cod_epis, detalhes, request)
+    
+    update_data = dados.dict(exclude_unset=True)
+    del update_data["justificativa"]
+    del update_data["autorizacao"]
+    
+    for chave, valor in update_data.items():
+        setattr(db_episodio, chave, valor)
+    
+    sessao.add(db_episodio)
+    sessao.commit()
+    sessao.refresh(db_episodio)
+    return db_episodio
+
+@router.get("/triagens", response_model=List[Triagem], dependencies=[Depends(admin_only)])
+def listar_triagens(id_hospital: Optional[str] = None, sessao: Session = Depends(obter_sessao)):
+    if id_hospital:
+        query = select(Triagem).join(EpisodioUrgencia, Triagem.cod_epis == EpisodioUrgencia.cod_epis).where(EpisodioUrgencia.id_hospital == id_hospital)
+        return sessao.exec(query).all()
+    return sessao.exec(select(Triagem)).all()
+
+@router.patch("/triagens/{num_triagem}/audit", response_model=Triagem, dependencies=[Depends(admin_only)])
+def atualizar_triagem_auditada(
+    num_triagem: int, 
+    dados: AtualizarTriagemAuditada, 
+    request: Request,
+    sessao: Session = Depends(obter_sessao),
+    admin: Utilizador = Depends(obter_utilizador_atual)
+):
+    db_triagem = sessao.get(Triagem, num_triagem)
+    if not db_triagem:
+        raise HTTPException(status_code=404, detail="Triagem não encontrada")
+    
+    detalhes = f"Justificativa: {dados.justificativa} | Autorização: {dados.autorizacao}"
+    log_audit(sessao, admin.id_utilizador, "UPDATE_AUDITED", "triagem", str(num_triagem), detalhes, request)
+    
+    update_data = dados.dict(exclude_unset=True)
+    del update_data["justificativa"]
+    del update_data["autorizacao"]
+    
+    for chave, valor in update_data.items():
+        setattr(db_triagem, chave, valor)
+    
+    sessao.add(db_triagem)
+    sessao.commit()
+    sessao.refresh(db_triagem)
+    return db_triagem
+
+@router.get("/atos", response_model=List[Ato], dependencies=[Depends(admin_only)])
+def listar_atos(id_hospital: Optional[str] = None, sessao: Session = Depends(obter_sessao)):
+    if id_hospital:
+        return sessao.exec(select(Ato).where(Ato.id_hosp == id_hospital)).all()
+    return sessao.exec(select(Ato)).all()
+
+@router.patch("/atos/{data_h_inicio}/audit", response_model=Ato, dependencies=[Depends(admin_only)])
+def atualizar_ato_auditado(
+    data_h_inicio: datetime, 
+    dados: AtualizarAtoAuditado, 
+    request: Request,
+    sessao: Session = Depends(obter_sessao),
+    admin: Utilizador = Depends(obter_utilizador_atual)
+):
+    db_ato = sessao.get(Ato, data_h_inicio)
+    if not db_ato:
+        raise HTTPException(status_code=404, detail="Ato clínico não encontrado")
+    
+    detalhes = f"Justificativa: {dados.justificativa} | Autorização: {dados.autorizacao}"
+    log_audit(sessao, admin.id_utilizador, "UPDATE_AUDITED", "ato", str(data_h_inicio), detalhes, request)
+    
+    update_data = dados.dict(exclude_unset=True)
+    del update_data["justificativa"]
+    del update_data["autorizacao"]
+    
+    for chave, valor in update_data.items():
+        setattr(db_ato, chave, valor)
+    
+    sessao.add(db_ato)
+    sessao.commit()
+    sessao.refresh(db_ato)
+    return db_ato
 
 # HOSPITAIS
 @router.get("/hospitals", response_model=List[Hospital])
@@ -108,12 +233,6 @@ def pesquisar_utente(
     resultados = sessao.exec(query).all()
     return resultados
 
-import random
-import string
-from ..core.security import obter_hash_palavra_passe, verificar_palavra_passe, criar_token_acesso, obter_utilizador_atual
-from ..core.email import enviar_email_ativacao
-from ..models.models import EmailValidation
-
 # SCHEMAS ADICIONAIS
 class UtenteCreate(BaseModel):
     num_utente: int
@@ -124,6 +243,7 @@ class UtenteCreate(BaseModel):
     localidade: Optional[str] = None
     sexo: Optional[str] = "M"
     data_nascimento: Optional[str] = None # Aceita string do frontend (YYYY-MM-DD)
+    parentesco: Optional[str] = None
 
 class LoginUtente(BaseModel):
     num_utente: int
@@ -142,9 +262,14 @@ def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao:
         raise HTTPException(status_code=400, detail=f"O número de utente {dados.num_utente} já está registado.")
     
     # 2. Verificar se o e-mail já existe
-    existente_email = sessao.exec(select(Utente).where(Utente.email == dados.email.lower().strip())).first()
-    if existente_email:
-        raise HTTPException(status_code=400, detail=f"O e-mail {dados.email} já está associado a outro utente.")
+    email_limpo = dados.email.lower().strip()
+    existente_email = sessao.exec(select(Utente).where(Utente.email == email_limpo)).first()
+    
+    if existente_email and not dados.parentesco:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"O e-mail {dados.email} já está associado a outro utente ({existente_email.nome}). Para registar um novo utente com o mesmo e-mail, deve indicar o grau de parentesco (ex: Filho/a, Cônjuge)."
+        )
 
     # 3. Tratar data de nascimento (converter string vazia para None)
     data_nasc = None
@@ -164,7 +289,7 @@ def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao:
     novo_utente = Utente(
         num_utente=dados.num_utente,
         nome=dados.nome,
-        email=dados.email.lower().strip(),
+        email=email_limpo,
         telemovel=dados.telemovel or None,
         morada=dados.morada or None,
         localidade=dados.localidade or None,
@@ -172,7 +297,8 @@ def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao:
         data_nascimento=data_nasc,
         password_hash=obter_hash_palavra_passe(pin_temporario),
         ativo=False,
-        primeiro_acesso=True
+        primeiro_acesso=True,
+        parentesco=dados.parentesco
     )
     
     # 6. Gerar código de ativação
@@ -194,11 +320,7 @@ def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao:
         print(f"\n📧 [DEBUG MOBILE] Utente {novo_utente.num_utente} | PIN: {pin_temporario} | Código: {codigo_ativacao}\n")
         
         sessao.refresh(novo_utente)
-        return {
-            "success": True,
-            "message": "Utente registado com sucesso! Verifique o seu e-mail para ativar a conta.",
-            "data": novo_utente
-        }
+        return novo_utente
     except Exception as e:
         sessao.rollback()
         print(f"ERRO CRÍTICO AO CRIAR UTENTE: {str(e)}")
@@ -329,7 +451,7 @@ def eliminar_utente(num_utente: int, sessao: Session = Depends(obter_sessao)):
 
 # EPISODIOS
 @router.post("/episodes", response_model=EpisodioUrgencia)
-def criar_episodio(dados_epis: CriarEpisodio, sessao: Session = Depends(obter_sessao)):
+def criar_episodio(dados_epis: CriarEpisodio, sessao: Session = Depends(obter_sessao), utilizador: Utilizador = Depends(obter_utilizador_atual)):
     # 1. Verificar se o utente já tem um episódio em aberto
     episodio_ativo = sessao.exec(
         select(EpisodioUrgencia).where(
@@ -373,7 +495,8 @@ def criar_episodio(dados_epis: CriarEpisodio, sessao: Session = Depends(obter_se
         id_utente=dados_epis.id_utente,
         id_hospital=dados_epis.id_hospital,
         sintomas=dados_epis.sintomas,
-        observacoes=dados_epis.observacoes
+        observacoes=dados_epis.observacoes,
+        id_utilizador_rececao=utilizador.id_utilizador
     )
     
     sessao.add(db_episodio)
@@ -384,11 +507,17 @@ def criar_episodio(dados_epis: CriarEpisodio, sessao: Session = Depends(obter_se
 @router.get("/episodes", response_model=List[EpisodioUrgencia])
 def ler_episodios(
     id_hospital: Optional[str] = None, 
+    em_aberto: Optional[bool] = None,
     sessao: Session = Depends(obter_sessao)
 ):
     query = select(EpisodioUrgencia)
     if id_hospital:
         query = query.where(EpisodioUrgencia.id_hospital == id_hospital)
+    
+    if em_aberto is True:
+        query = query.where(EpisodioUrgencia.data_h_saida == None)
+    elif em_aberto is False:
+        query = query.where(EpisodioUrgencia.data_h_saida != None)
     
     query = query.order_by(EpisodioUrgencia.data_h_entrada.desc())
     
@@ -419,37 +548,153 @@ def eliminar_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
 
 @router.get("/episodes/{cod_epis}/team")
 def obter_equipa_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
-    # Lógica baseada nas tabelas ORIGINAIS:
-    # 1. Buscar enfermeiro da Triagem
-    # 2. Buscar médicos de Atos/Envolve
-    # 3. Buscar médicos de Prescrições
-    
     equipa = []
     
     # Triagem
-    triagem = sessao.exec(select(Triagem, FuncionarioHospital).join(FuncionarioHospital, Triagem.num_func_enfermeiro == FuncionarioHospital.num_func).where(Triagem.cod_epis == cod_epis)).all()
-    for t, f in triagem:
-        equipa.append({"num_func": f.num_func, "tipo_func": f.tipo_func, "papel": "Triagem", "data": t.data_h_triagem})
+    query_triagem = select(Triagem, Utilizador).join(
+        Utilizador, Triagem.num_func_enfermeiro == Utilizador.num_func, isouter=True
+    ).where(Triagem.cod_epis == cod_epis)
+    triagens = sessao.exec(query_triagem).all()
+    for t, u in triagens:
+        equipa.append({
+            "num_func": t.num_func_enfermeiro, 
+            "nome": u.nome_completo if u else f"Profissional {t.num_func_enfermeiro}",
+            "username": u.nome_utilizador if u else "---",
+            "tipo_func": "ENFERMEIRO", 
+            "papel": "Triagem", 
+            "data": t.data_h_triagem
+        })
         
     # Atos (via Envolve)
-    envolvimentos = sessao.exec(select(Envolve, FuncionarioHospital).join(FuncionarioHospital, Envolve.num_func == FuncionarioHospital.num_func).where(Envolve.cod_epis == cod_epis)).all()
-    for e, f in envolvimentos:
-        equipa.append({"num_func": f.num_func, "tipo_func": f.tipo_func, "papel": "Ato Clínico", "data": e.data_h_inicio})
+    query_atos = select(Envolve, Utilizador, FuncionarioHospital).join(
+        FuncionarioHospital, Envolve.num_func == FuncionarioHospital.num_func
+    ).join(
+        Utilizador, Envolve.num_func == Utilizador.num_func, isouter=True
+    ).where(Envolve.cod_epis == cod_epis)
+    envolvimentos = sessao.exec(query_atos).all()
+    for e, u, f in envolvimentos:
+        equipa.append({
+            "num_func": e.num_func, 
+            "nome": u.nome_completo if u else f"Profissional {e.num_func}",
+            "username": u.nome_utilizador if u else "---",
+            "tipo_func": f.tipo_func, 
+            "papel": "Ato Clínico", 
+            "data": e.data_h_inicio
+        })
         
     # Prescrições
-    prescricoes = sessao.exec(select(Prescricao, FuncionarioHospital).join(FuncionarioHospital, Prescricao.num_func_medico == FuncionarioHospital.num_func).where(Prescricao.cod_epis == cod_epis)).all()
-    for p, f in prescricoes:
-        equipa.append({"num_func": f.num_func, "tipo_func": f.tipo_func, "papel": "Prescrição", "data": p.data_h_presc})
+    query_presc = select(Prescricao, Utilizador).join(
+        Utilizador, Prescricao.num_func_medico == Utilizador.num_func, isouter=True
+    ).where(Prescricao.cod_epis == cod_epis)
+    prescricoes = sessao.exec(query_presc).all()
+    for p, u in prescricoes:
+        equipa.append({
+            "num_func": p.num_func_medico, 
+            "nome": u.nome_completo if u else f"Médico {p.num_func_medico}",
+            "username": u.nome_utilizador if u else "---",
+            "tipo_func": "MEDICO", 
+            "papel": "Prescrição", 
+            "data": p.data_h_presc
+        })
+
+    # Internamento
+    query_intern = select(Internamento, Utilizador).join(
+        Utilizador, Internamento.num_func_medico == Utilizador.num_func, isouter=True
+    ).where(Internamento.cod_epis == cod_epis)
+    internamentos = sessao.exec(query_intern).all()
+    for i, u in internamentos:
+        equipa.append({
+            "num_func": i.num_func_medico,
+            "nome": u.nome_completo if u else f"Médico {i.num_func_medico}",
+            "username": u.nome_utilizador if u else "---",
+            "tipo_func": "MEDICO",
+            "papel": "Internamento (Médico Responsável)",
+            "data": i.data_h_entrada
+        })
         
     return equipa
 
-@router.get("/episodes/awaiting-triage", response_model=List[EpisodioUrgencia])
+@router.get("/episodes/{cod_epis}/journey", dependencies=[Depends(admin_only)])
+def obter_percurso_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
+    episodio = sessao.get(EpisodioUrgencia, cod_epis)
+    if not episodio:
+        raise HTTPException(status_code=404, detail="Episódio não encontrado")
+    
+    utente = sessao.get(Utente, episodio.id_utente)
+    
+    # Triagem com LEFT JOIN
+    query_triagem = select(Triagem, Utilizador).join(
+        Utilizador, Triagem.num_func_enfermeiro == Utilizador.num_func, isouter=True
+    ).where(Triagem.cod_epis == cod_epis)
+    res_triagem = sessao.exec(query_triagem).first()
+    triagem_final = None
+    if res_triagem:
+        t, u = res_triagem
+        triagem_final = t.dict()
+        triagem_final["enfermeiro_nome"] = u.nome_completo if u else f"Enf. {t.num_func_enfermeiro}"
+        triagem_final["enfermeiro_username"] = u.nome_utilizador if u else "---"
+
+    # Atos com LEFT JOIN
+    query_atos = select(Ato, Utilizador).join(
+        Utilizador, Ato.num_func == Utilizador.num_func, isouter=True
+    ).where(Ato.cod_epis == cod_epis)
+    res_atos = sessao.exec(query_atos).all()
+    atos_finais = []
+    for a, u in res_atos:
+        ato_dict = a.dict()
+        ato_dict["profissional_nome"] = u.nome_completo if u else f"Prof. {a.num_func}"
+        ato_dict["profissional_username"] = u.nome_utilizador if u else "---"
+        atos_finais.append(ato_dict)
+
+    # Prescrições com LEFT JOIN
+    query_presc = select(Prescricao, Utilizador).join(
+        Utilizador, Prescricao.num_func_medico == Utilizador.num_func, isouter=True
+    ).where(Prescricao.cod_epis == cod_epis)
+    res_presc = sessao.exec(query_presc).all()
+    presc_finais = []
+    for p, u in res_presc:
+        presc_dict = p.dict()
+        presc_dict["medico_nome"] = u.nome_completo if u else f"Dr. {p.num_func_medico}"
+        presc_dict["medico_username"] = u.nome_utilizador if u else "---"
+        presc_finais.append(presc_dict)
+
+    # Internamento com LEFT JOIN
+    query_intern = select(Internamento, Utilizador).join(
+        Utilizador, Internamento.num_func_medico == Utilizador.num_func, isouter=True
+    ).where(Internamento.cod_epis == cod_epis)
+    res_intern = sessao.exec(query_intern).first()
+    intern_final = None
+    if res_intern:
+        i, u = res_intern
+        intern_final = i.dict()
+        intern_final["medico_nome"] = u.nome_completo if u else f"Dr. {i.num_func_medico}"
+        intern_final["medico_username"] = u.nome_utilizador if u else "---"
+        
+    equipa = obter_equipa_episodio(cod_epis, sessao)
+    
+    # Logs de auditoria relacionados a este episódio
+    logs = sessao.exec(select(AuditLog).where(AuditLog.id_recurso == cod_epis)).all()
+    
+    return {
+        "episodio": episodio,
+        "utente": utente,
+        "triagem": triagem_final,
+        "atos": atos_finais,
+        "prescricoes": presc_finais,
+        "internamento": intern_final,
+        "equipa": equipa,
+        "logs_auditoria": logs
+    }
+
+@router.get("/episodes/awaiting-triage")
 def ler_episodios_aguardando_triagem(
     id_hospital: Optional[str] = None, 
     sessao: Session = Depends(obter_sessao)
 ):
     # Selecionar episódios que não têm triagem e não têm data de saída
-    query = select(EpisodioUrgencia).where(
+    query = select(EpisodioUrgencia, Utilizador).join(
+        Utilizador, EpisodioUrgencia.id_utilizador_rececao == Utilizador.id_utilizador, isouter=True
+    ).where(
         EpisodioUrgencia.data_h_saida == None,
         ~EpisodioUrgencia.cod_epis.in_(select(Triagem.cod_epis))
     )
@@ -460,7 +705,16 @@ def ler_episodios_aguardando_triagem(
     # Ordem de chegada (mais antigos primeiro)
     query = query.order_by(EpisodioUrgencia.data_h_entrada.asc())
     
-    return sessao.exec(query).all()
+    resultados = sessao.exec(query).all()
+    
+    final = []
+    for ep, user in resultados:
+        ep_dict = ep.dict()
+        ep_dict["rececionista_nome"] = user.nome_completo if user else f"Utilizador {ep.id_utilizador_rececao}"
+        ep_dict["rececionista_username"] = user.nome_utilizador if user else "---"
+        final.append(ep_dict)
+        
+    return final
 
 # TRIAGEM
 @router.post("/triagens", response_model=Triagem)
@@ -470,30 +724,13 @@ def criar_triagem(triagem: Triagem, sessao: Session = Depends(obter_sessao)):
     sessao.refresh(triagem)
     return triagem
 
-@router.get("/episodes/{cod_epis}")
-def obter_episodio_detalhado(cod_epis: str, sessao: Session = Depends(obter_sessao)):
-    episodio = sessao.get(EpisodioUrgencia, cod_epis)
-    if not episodio:
-        raise HTTPException(status_code=404, detail="Episódio não encontrado")
-    utente = sessao.get(Utente, episodio.id_utente)
-    # Procurar a triagem deste episódio
-    triagem = sessao.exec(select(Triagem).where(Triagem.cod_epis == cod_epis)).first()
-    
-    return {
-        "cod_epis": episodio.cod_epis,
-        "data_h_entrada": episodio.data_h_entrada,
-        "id_utente": episodio.id_utente,
-        "id_hospital": episodio.id_hospital,
-        "sintomas_iniciais": episodio.sintomas,
-        "utente": utente,
-        "triagem": triagem
-    }
-
 @router.get("/episodes/awaiting-doctor", response_model=List[dict])
 def ler_episodios_aguardando_medico(
     id_hospital: Optional[str] = None, 
     sessao: Session = Depends(obter_sessao)
 ):
+    print(f"DEBUG: ler_episodios_aguardando_medico chamado com id_hospital='{id_hospital}'")
+    
     # Selecionar episódios que TÊM triagem e NÃO têm data de saída
     query = select(EpisodioUrgencia, Triagem, Utente).join(
         Triagem, EpisodioUrgencia.cod_epis == Triagem.cod_epis
@@ -503,8 +740,11 @@ def ler_episodios_aguardando_medico(
         EpisodioUrgencia.data_h_saida == None
     )
     
-    if id_hospital:
+    if id_hospital and id_hospital.strip() and id_hospital != "undefined" and id_hospital != "null":
         query = query.where(EpisodioUrgencia.id_hospital == id_hospital)
+        print(f"DEBUG: Filtrando por hospital '{id_hospital}'")
+    else:
+        print("DEBUG: Sem filtro de hospital (retornando todos)")
     
     # Ordenar por prioridade (Simulação simplificada Manchester) e depois por tempo
     resultados = sessao.exec(query).all()
@@ -524,7 +764,56 @@ def ler_episodios_aguardando_medico(
     ordem = {"VERMELHO": 0, "LARANJA": 1, "AMARELO": 2, "VERDE": 3, "AZUL": 4}
     fila.sort(key=lambda x: (ordem.get(x["prioridade"], 9), x["data_h_entrada"]))
     
+    print(f"DEBUG: Fila para hospital '{id_hospital}' tem {len(fila)} pacientes.")
+    
     return fila
+
+@router.get("/episodes/{cod_epis}")
+def obter_episodio_detalhado(cod_epis: str, sessao: Session = Depends(obter_sessao)):
+    episodio = sessao.get(EpisodioUrgencia, cod_epis)
+    if not episodio:
+        raise HTTPException(status_code=404, detail="Episódio não encontrado")
+    utente = sessao.get(Utente, episodio.id_utente)
+    
+    # Triagem com nome do enfermeiro (LEFT JOIN)
+    query_triagem = select(Triagem, Utilizador).join(
+        Utilizador, Triagem.num_func_enfermeiro == Utilizador.num_func, isouter=True
+    ).where(Triagem.cod_epis == cod_epis)
+    res_triagem = sessao.exec(query_triagem).first()
+    
+    triagem_data = None
+    if res_triagem:
+        t, u = res_triagem
+        triagem_data = t.dict()
+        triagem_data["enfermeiro_nome"] = u.nome_completo if u else f"Enf. {t.num_func_enfermeiro}"
+
+    return {
+        "cod_epis": episodio.cod_epis,
+        "data_h_entrada": episodio.data_h_entrada,
+        "id_utente": episodio.id_utente,
+        "id_hospital": episodio.id_hospital,
+        "sintomas_iniciais": episodio.sintomas,
+        "utente": utente,
+        "triagem": triagem_data
+    }
+
+@router.get("/hospitals/{nome_hosp}/services", response_model=List[ServicoHospitalar])
+def listar_servicos_hospital(nome_hosp: str, sessao: Session = Depends(obter_sessao)):
+    return sessao.exec(select(ServicoHospitalar).where(ServicoHospitalar.id_hosp == nome_hosp)).all()
+
+@router.post("/internamentos", response_model=Internamento)
+def criar_internamento(internamento: Internamento, sessao: Session = Depends(obter_sessao)):
+    sessao.add(internamento)
+    
+    # Ao internar, o episódio de urgência termina
+    episodio = sessao.get(EpisodioUrgencia, internamento.cod_epis)
+    if episodio:
+        episodio.data_h_saida = datetime.now()
+        sessao.add(episodio)
+    
+    sessao.commit()
+    sessao.refresh(internamento)
+    return internamento
 
 @router.post("/triagens/manchester", response_model=Triagem)
 def registar_triagem_manchester(dados: CriarTriagem, sessao: Session = Depends(obter_sessao)):
@@ -568,7 +857,10 @@ def registar_triagem_manchester(dados: CriarTriagem, sessao: Session = Depends(o
     return db_triagem
 
 @router.get("/utentes/{num_utente}/history")
-def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sessao)):
+def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sessao), utilizador: Utilizador = Depends(obter_utilizador_atual)):
+    # Validar se o utilizador tem permissão (Médico, Enfermeiro ou Admin)
+    RoleChecker(["ADMIN", "MEDICO", "ENFERMEIRO"])(utilizador)
+    
     # 1. Obter todos os episódios do utente
     episodios = sessao.exec(
         select(EpisodioUrgencia).where(EpisodioUrgencia.id_utente == num_utente).order_by(EpisodioUrgencia.data_h_entrada.desc())
@@ -576,34 +868,63 @@ def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sess
     
     historico = []
     for ep in episodios:
-        # Para cada episódio, buscar a triagem e atos
-        triagem = sessao.exec(select(Triagem).where(Triagem.cod_epis == ep.cod_epis)).first()
-        atos = sessao.exec(select(Ato).where(Ato.cod_epis == ep.cod_epis)).all()
-        prescricoes = sessao.exec(select(Prescricao).where(Prescricao.cod_epis == ep.cod_epis)).all()
+        # Triagem com nome (LEFT JOIN)
+        query_triagem = select(Triagem, Utilizador).join(
+            Utilizador, Triagem.num_func_enfermeiro == Utilizador.num_func, isouter=True
+        ).where(Triagem.cod_epis == ep.cod_epis)
+        res_triagem = sessao.exec(query_triagem).first()
+        triagem_final = None
+        if res_triagem:
+            t, u = res_triagem
+            triagem_final = t.dict()
+            triagem_final["enfermeiro_nome"] = u.nome_completo if u else f"Enf. {t.num_func_enfermeiro}"
+            triagem_final["enfermeiro_username"] = u.nome_utilizador if u else "---"
+
+        # Atos com nome (LEFT JOIN)
+        query_atos = select(Ato, Utilizador).join(
+            Utilizador, Ato.num_func == Utilizador.num_func, isouter=True
+        ).where(Ato.cod_epis == ep.cod_epis)
+        res_atos = sessao.exec(query_atos).all()
+        atos_finais = []
+        for a, u in res_atos:
+            ato_dict = a.dict()
+            ato_dict["profissional_nome"] = u.nome_completo if u else f"Prof. {a.num_func}"
+            ato_dict["profissional_username"] = u.nome_utilizador if u else "---"
+            atos_finais.append(ato_dict)
+
+        # Prescrições com nome (LEFT JOIN)
+        query_presc = select(Prescricao, Utilizador).join(
+            Utilizador, Prescricao.num_func_medico == Utilizador.num_func, isouter=True
+        ).where(Prescricao.cod_epis == ep.cod_epis)
+        res_presc = sessao.exec(query_presc).all()
+        presc_finais = []
+        for p, u in res_presc:
+            presc_dict = p.dict()
+            presc_dict["medico_nome"] = u.nome_completo if u else f"Dr. {p.num_func_medico}"
+            presc_dict["medico_username"] = u.nome_utilizador if u else "---"
+            presc_finais.append(presc_dict)
+
+        # Internamento com nome (LEFT JOIN)
+        query_intern = select(Internamento, Utilizador).join(
+            Utilizador, Internamento.num_func_medico == Utilizador.num_func, isouter=True
+        ).where(Internamento.cod_epis == ep.cod_epis)
+        res_intern = sessao.exec(query_intern).first()
+        intern_final = None
+        if res_intern:
+            i, u = res_intern
+            intern_final = i.dict()
+            intern_final["medico_nome"] = u.nome_completo if u else f"Dr. {i.num_func_medico}"
+            intern_final["medico_username"] = u.nome_utilizador if u else "---"
         
         historico.append({
             "episodio": ep,
-            "triagem": triagem,
-            "atos": atos,
-            "prescricoes": prescricoes
+            "triagem": triagem_final,
+            "atos": atos_finais,
+            "prescricoes": presc_finais,
+            "internamento": intern_final
         })
     
-    resumo_historico = []
-    for item in historico:
-        ep = item["episodio"]
-        tri = item["triagem"]
-        resumo_historico.append({
-            "id": str(ep.cod_epis),
-            "data": ep.data_h_entrada.strftime("%Y-%m-%d %H:%M"),
-            "hospital": ep.id_hospital,
-            "estado": "Concluído" if ep.data_h_saida else "Em curso",
-            "prioridade": tri.prioridade if tri else "N/A"
-        })
-    return {
-        "success": True,
-        "message": "Histórico obtido com sucesso",
-        "data": resumo_historico
-    }
+    return historico
 
 @router.get("/episodes/{cod_epis}/prescriptions", response_model=List[Prescricao])
 def listar_prescricoes_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
@@ -623,9 +944,75 @@ def criar_ato(ato: Ato, sessao: Session = Depends(obter_sessao)):
     )
     sessao.add(db_envolve)
     
+    # Se a decisão clínica for ALTA, fechar o episódio
+    if ato.decisao_clinica == "ALTA":
+        episodio = sessao.get(EpisodioUrgencia, ato.cod_epis)
+        if episodio:
+            episodio.data_h_saida = datetime.now()
+            sessao.add(episodio)
+            
     sessao.commit()
     sessao.refresh(ato)
     return ato
+
+@router.get("/internamentos")
+def listar_internamentos(id_hospital: Optional[str] = None, em_aberto: bool = True, sessao: Session = Depends(obter_sessao)):
+    query = select(Internamento, EpisodioUrgencia, Utente, ServicoHospitalar).join(
+        EpisodioUrgencia, Internamento.cod_epis == EpisodioUrgencia.cod_epis
+    ).join(
+        Utente, EpisodioUrgencia.id_utente == Utente.num_utente
+    ).join(
+        ServicoHospitalar, Internamento.id_servico == ServicoHospitalar.id_servico
+    )
+    
+    if em_aberto:
+        query = query.where(Internamento.data_h_saida == None)
+    
+    if id_hospital:
+        query = query.where(EpisodioUrgencia.id_hospital == id_hospital)
+        
+    resultados = sessao.exec(query).all()
+    
+    internamentos_formatados = []
+    for intern, ep, ut, serv in resultados:
+        # Obter nome do médico responsável
+        medico_nome = "---"
+        if intern.num_func_medico:
+            u_medico = sessao.exec(select(Utilizador).where(Utilizador.num_func == intern.num_func_medico)).first()
+            if u_medico:
+                medico_nome = u_medico.nome_completo
+
+        internamentos_formatados.append({
+            "num_internamento": intern.num_internamento,
+            "cod_epis": intern.cod_epis,
+            "utente_nome": ut.nome,
+            "id_utente": ut.num_utente,
+            "servico_nome": serv.nome,
+            "num_cama": intern.num_cama,
+            "data_h_entrada": intern.data_h_entrada,
+            "medico_responsavel": medico_nome
+        })
+        
+    return internamentos_formatados
+
+@router.post("/internamentos/{num_internamento}/discharge")
+def dar_alta_internamento(num_internamento: int, sessao: Session = Depends(obter_sessao)):
+    internamento = sessao.get(Internamento, num_internamento)
+    if not internamento:
+        raise HTTPException(status_code=404, detail="Internamento não encontrado")
+    
+    agora = datetime.now()
+    internamento.data_h_saida = agora
+    sessao.add(internamento)
+    
+    # Também fechar o episódio de urgência (se ainda estiver aberto por algum motivo)
+    episodio = sessao.get(EpisodioUrgencia, internamento.cod_epis)
+    if episodio and episodio.data_h_saida is None:
+        episodio.data_h_saida = agora
+        sessao.add(episodio)
+        
+    sessao.commit()
+    return {"message": "Alta de internamento registada"}
 
 # PRESCRICAO
 @router.post("/prescricoes", response_model=Prescricao)

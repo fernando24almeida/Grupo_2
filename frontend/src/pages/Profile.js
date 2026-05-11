@@ -11,7 +11,8 @@ const Profile = () => {
     telemovel: '',
     id_role: '',
     num_func: '',
-    ativo: false
+    ativo: false,
+    estagiario: null
   });
   
   const [papeis, setPapeis] = useState([]);
@@ -45,7 +46,8 @@ const Profile = () => {
         telemovel: res.data.telemovel || '',
         id_role: res.data.id_role || '',
         num_func: res.data.num_func || '',
-        ativo: res.data.ativo || false
+        ativo: res.data.ativo || false,
+        estagiario: res.data.estagiario || null
       });
       setLoading(false);
     } catch (err) {
@@ -63,6 +65,8 @@ const Profile = () => {
       nome_completo: userData.nome_completo,
       email: userData.email,
       telemovel: userData.telemovel,
+      estagiario: userData.estagiario,
+      especialidade: userData.especialidade
     };
 
     if (novaPassword) {
@@ -116,6 +120,16 @@ const Profile = () => {
                 <User size={16} />
                 <span>Username: {userData.nome_utilizador}</span>
               </div>
+              <div className="info-item">
+                <Phone size={16} />
+                <span>Telemóvel: {userData.telemovel || 'N/A'}</span>
+              </div>
+              {userData.estagiario && (
+                <div className="info-item">
+                  <ShieldCheck size={16} />
+                  <span>Status: {userData.estagiario === 'SIM' ? 'Médico Estagiário' : 'Médico Especialista'}</span>
+                </div>
+              )}
               {userData.num_func && (
                 <div className="info-item">
                   <ShieldCheck size={16} />
@@ -173,6 +187,30 @@ const Profile = () => {
                   </div>
                 </div>
               </div>
+
+              {userData.id_role && papeis.find(p => p.id_role === userData.id_role)?.nome === 'MEDICO' && (
+                <div className="form-row" style={{ background: '#f8fafc', padding: '15px', borderRadius: '8px', marginBottom: '15px', border: '1px solid var(--border)' }}>
+                  <div className="form-group">
+                    <label>Status Profissional:</label>
+                    <select 
+                      value={userData.estagiario || 'NÃO'} 
+                      onChange={e => setUserData({...userData, estagiario: e.target.value})}
+                    >
+                      <option value="SIM">Médico Estagiário</option>
+                      <option value="NÃO">Médico Especialista</option>
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label>Especialidade Médica:</label>
+                    <input 
+                      type="text" 
+                      value={userData.especialidade || ''} 
+                      onChange={e => setUserData({...userData, especialidade: e.target.value})}
+                      placeholder="Ex: Cardiologia, Pediatria..."
+                    />
+                  </div>
+                </div>
+              )}
 
               <hr className="divider" />
 
