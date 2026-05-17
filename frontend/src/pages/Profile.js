@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import { usarAutenticacao } from '../services/AuthContext';
 import { User, Mail, Phone, Lock, Save, ShieldCheck, Hash, CheckCircle, AlertCircle } from 'lucide-react';
 
 const Profile = () => {
+  const { utilizador: authUser } = usarAutenticacao();
   const [userData, setUserData] = useState({
     id_utilizador: '',
     nome_utilizador: '',
@@ -11,6 +13,9 @@ const Profile = () => {
     telemovel: '',
     id_role: '',
     num_func: '',
+    num_utente: '', // Adicionado para utentes
+    morada: '',
+    localidade: '',
     ativo: false,
     estagiario: null
   });
@@ -20,39 +25,51 @@ const Profile = () => {
   const [loading, setLoading] = useState(true);
   const [mensagem, setMensagem] = useState({ tipo: '', texto: '' });
 
+  const isUtente = authUser?.role === 'UTENTE';
+
   useEffect(() => {
     fetchProfile();
   }, []);
 
   const fetchProfile = async () => {
     try {
-      // Garantir que temos o token para o pedido, lendo diretamente do localStorage
       const token = localStorage.getItem('token');
       const config = token ? { headers: { Authorization: `Bearer ${token}` } } : {};
 
-      // Carregar papéis para mostrar o nome do cargo
+      // Carregar papéis
       const resPapeis = await axios.get('/auth/roles', config);
       setPapeis(resPapeis.data);
 
-      // Carregar dados do perfil
-      const res = await axios.get('/auth/users/me', config);
-      console.log('Perfil carregado:', res.data);
+      // Carregar dados conforme o papel
+      const endpoint = isUtente ? '/clinical/utentes/me' : '/auth/users/me';
+      const res = await axios.get(endpoint, config);
       
-      setUserData({
-        id_utilizador: res.data.id_utilizador || '',
-        nome_utilizador: res.data.nome_utilizador || '',
-        nome_completo: res.data.nome_completo || '',
-        email: res.data.email || '',
-        telemovel: res.data.telemovel || '',
-        id_role: res.data.id_role || '',
-        num_func: res.data.num_func || '',
-        ativo: res.data.ativo || false,
-        estagiario: res.data.estagiario || null
-      });
+      if (isUtente) {
+        setUserData({
+          num_utente: res.data.num_utente,
+          nome_completo: res.data.nome,
+          email: res.data.email,
+          telemovel: res.data.telemovel || '',
+          morada: res.data.morada || '',
+          localidade: res.data.localidade || '',
+          id_role: res.data.id_role
+        });
+      } else {
+        setUserData({
+          id_utilizador: res.data.id_utilizador || '',
+          nome_utilizador: res.data.nome_utilizador || '',
+          nome_completo: res.data.nome_completo || '',
+          email: res.data.email || '',
+          telemovel: res.data.telemovel || '',
+          id_role: res.data.id_role || '',
+          num_func: res.data.num_func || '',
+          ativo: res.data.ativo || false,
+          estagiario: res.data.estagiario || null
+        });
+      }
       setLoading(false);
     } catch (err) {
-      console.error('Erro ao carregar perfil:', err);
-      setMensagem({ tipo: 'error', texto: 'Sessão expirada ou erro ao carregar dados.' });
+      setMensagem({ tipo: 'error', texto: 'Erro ao carregar dados do perfil.' });
       setLoading(false);
     }
   };
@@ -61,20 +78,40 @@ const Profile = () => {
     e.preventDefault();
     setMensagem({ tipo: '', texto: '' });
 
-    const payload = {
-      nome_completo: userData.nome_completo,
-      email: userData.email,
-      telemovel: userData.telemovel,
-      estagiario: userData.estagiario,
-      especialidade: userData.especialidade
-    };
+    let payload = {};
+    let endpoint = '';
+
+    if (isUtente) {
+      endpoint = '/clinical/utentes/me';
+      payload = {
+        telemovel: userData.telemovel,
+        morada: userData.morada,
+        localidade: userData.localidade
+      };
+      // Nota: PIN alterado via endpoint específico ou patch se o backend permitir
+    } else {
+      endpoint = '/auth/users/me';
+      payload = {
+        nome_completo: userData.nome_completo,
+        email: userData.email,
+        telemovel: userData.telemovel,
+        estagiario: userData.estagiario,
+        especialidade: userData.especialidade
+      };
+    }
 
     if (novaPassword) {
-      payload.palavra_passe = novaPassword;
+      if (isUtente) {
+        // Se for utente, o campo no modelo é password_hash mas o patch espera novo_pin se for endpoint dedicado
+        // Para simplificar, assumimos que o backend no patch /utentes/me ignora password ou tratar separadamente
+        payload.password = novaPassword; 
+      } else {
+        payload.palavra_passe = novaPassword;
+      }
     }
 
     try {
-      await axios.patch('/auth/users/me', payload);
+      await axios.patch(endpoint, payload);
       setMensagem({ tipo: 'success', texto: 'Perfil atualizado com sucesso!' });
       setNovaPassword('');
       fetchProfile();
@@ -85,7 +122,8 @@ const Profile = () => {
 
   if (loading) return <div className="loading">Carregando perfil...</div>;
 
-  const roleName = papeis.find(p => p.id_role === userData.id_role)?.nome || 'Utilizador';
+  const roleName = papeis.find(p => p.id_role === userData.id_role)?.nome || (isUtente ? 'UTENTE' : 'Utilizador');
+  const iniciais = (userData.nome_completo || 'U').charAt(0).toUpperCase();
 
   return (
     <div className="profile-page">
@@ -102,45 +140,40 @@ const Profile = () => {
       )}
 
       <div className="profile-grid">
-        {/* COLUNA DA ESQUERDA: INFORMAÇÃO FIXA (CHAVE) */}
         <div className="profile-sidebar">
           <div className="card user-card">
             <div className="user-avatar">
-              {userData.nome_completo.charAt(0).toUpperCase()}
+              {iniciais}
             </div>
-            <h3>{userData.nome_completo}</h3>
+            <h3>{userData.nome_completo || 'Utilizador'}</h3>
             <span className="badge-role">{roleName}</span>
             
             <div className="user-info-list">
-              <div className="info-item">
-                <Hash size={16} />
-                <span>ID: {userData.id_utilizador}</span>
-              </div>
-              <div className="info-item">
-                <User size={16} />
-                <span>Username: {userData.nome_utilizador}</span>
-              </div>
-              <div className="info-item">
-                <Phone size={16} />
-                <span>Telemóvel: {userData.telemovel || 'N/A'}</span>
-              </div>
-              {userData.estagiario && (
+              {isUtente ? (
                 <div className="info-item">
-                  <ShieldCheck size={16} />
-                  <span>Status: {userData.estagiario === 'SIM' ? 'Médico Estagiário' : 'Médico Especialista'}</span>
+                  <Hash size={16} />
+                  <span>NIF: {userData.num_utente}</span>
                 </div>
+              ) : (
+                <>
+                  <div className="info-item">
+                    <Hash size={16} />
+                    <span>ID: {userData.id_utilizador}</span>
+                  </div>
+                  <div className="info-item">
+                    <User size={16} />
+                    <span>Username: {userData.nome_utilizador}</span>
+                  </div>
+                </>
               )}
-              {userData.num_func && (
-                <div className="info-item">
-                  <ShieldCheck size={16} />
-                  <span>Nº Funcionário: {userData.num_func}</span>
-                </div>
-              )}
+              <div className="info-item">
+                <Mail size={16} />
+                <span>{userData.email}</span>
+              </div>
             </div>
           </div>
         </div>
 
-        {/* COLUNA DA DIREITA: FORMULÁRIO EDITÁVEL */}
         <div className="profile-main">
           <section className="card">
             <div className="section-header">
@@ -156,6 +189,8 @@ const Profile = () => {
                     type="text" 
                     value={userData.nome_completo} 
                     onChange={e => setUserData({...userData, nome_completo: e.target.value})}
+                    disabled={isUtente}
+                    className={isUtente ? 'bg-disabled' : ''}
                     required
                   />
                 </div>
@@ -170,6 +205,8 @@ const Profile = () => {
                       type="email" 
                       value={userData.email} 
                       onChange={e => setUserData({...userData, email: e.target.value})}
+                      disabled={isUtente}
+                      className={isUtente ? 'bg-disabled' : ''}
                       required
                     />
                   </div>
@@ -188,7 +225,19 @@ const Profile = () => {
                 </div>
               </div>
 
-              {userData.id_role && papeis.find(p => p.id_role === userData.id_role)?.nome === 'MEDICO' && (
+              {isUtente && (
+                <div className="form-group">
+                  <label>Morada:</label>
+                  <input 
+                    type="text" 
+                    value={userData.morada} 
+                    onChange={e => setUserData({...userData, morada: e.target.value})}
+                    placeholder="Sua morada completa"
+                  />
+                </div>
+              )}
+
+              {!isUtente && userData.id_role && papeis.find(p => p.id_role === userData.id_role)?.nome === 'MEDICO' && (
                 <div className="form-row" style={{ background: '#f8fafc', padding: '15px', borderRadius: '8px', marginBottom: '15px', border: '1px solid var(--border)' }}>
                   <div className="form-group">
                     <label>Status Profissional:</label>
@@ -220,17 +269,19 @@ const Profile = () => {
               </div>
               
               <div className="form-group">
-                <label>Alterar Palavra-passe:</label>
+                <label>{isUtente ? 'Alterar PIN:' : 'Alterar Palavra-passe:'}</label>
                 <div className="input-with-icon">
                   <Lock size={18} />
                   <input 
                     type="password" 
                     value={novaPassword} 
                     onChange={e => setNovaPassword(e.target.value)}
-                    placeholder="Deixe em branco para manter a atual"
+                    placeholder={isUtente ? 'Novo PIN de 6 dígitos' : 'Deixe em branco para manter a atual'}
                   />
                 </div>
-                <p className="form-hint">Mínimo 12 caracteres, com maiúsculas, números e símbolos.</p>
+                <p className="form-hint">
+                  {isUtente ? 'O PIN deve ter 6 dígitos numéricos.' : 'Mínimo 12 caracteres, com maiúsculas, números e símbolos.'}
+                </p>
               </div>
 
               <div className="form-actions">

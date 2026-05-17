@@ -10,27 +10,237 @@ import {
   UserCog,
   Clock,
   Users,
-  AlertCircle
+  AlertCircle,
+  User,
+  Eye,
+  X
 } from 'lucide-react';
 
 const Dashboard = () => {
   const { utilizador, hospital } = usarAutenticacao();
   const navigate = useNavigate();
   const [stats, setStats] = useState({ waiting: 0, critical: 0, stats: [] });
+  const [meusEpisodios, setMeusEpisodios] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedJourney, setSelectedJourney] = useState(null);
 
   useEffect(() => {
-    const fetchStats = async () => {
-      try {
-        const params = hospital ? { id_hospital: hospital } : {};
-        const res = await axios.get('/analytics/dashboard-summary', { params });
-        setStats(res.data);
-      } catch (e) { console.error('Erro ao carregar stats', e); }
-    };
-    fetchStats();
-    const interval = setInterval(fetchStats, 60000); // Atualizar a cada minuto
-    return () => clearInterval(interval);
-  }, [hospital]);
+    if (utilizador?.role === 'UTENTE') {
+      fetchMeusEpisodios();
+    } else {
+      fetchStats();
+      const interval = setInterval(fetchStats, 60000);
+      return () => clearInterval(interval);
+    }
+  }, [hospital, utilizador]);
 
+  const fetchStats = async () => {
+    try {
+      const params = hospital ? { id_hospital: hospital } : {};
+      const res = await axios.get('/analytics/dashboard-summary', { params });
+      setStats(res.data);
+    } catch (e) { console.error('Erro ao carregar stats', e); }
+  };
+
+  const fetchMeusEpisodios = async () => {
+    setLoading(true);
+    try {
+      const res = await axios.get('/clinical/episodes');
+      setMeusEpisodios(res.data);
+    } catch (e) {
+      console.error('Erro ao carregar episódios', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const verDetalhesEpisodio = async (codEpis) => {
+    try {
+      const res = await axios.get(`/clinical/episodes/${codEpis}/journey`);
+      setSelectedJourney(res.data);
+    } catch (e) {
+      console.error('Erro ao carregar percurso', e);
+      alert('Não foi possível carregar os detalhes do episódio.');
+    }
+  };
+
+  if (utilizador?.role === 'UTENTE') {
+    return (
+      <div className="dashboard">
+        <header className="page-header">
+          <div>
+            <h1 className="page-title">Olá, {utilizador?.nome_utilizador}</h1>
+            <p style={{ color: 'var(--text-muted)' }}>Consulte aqui o seu histórico de episódios de urgência.</p>
+          </div>
+          <button className="btn btn-primary" onClick={() => navigate('/profile')}>
+            <User size={18} /> O Meu Perfil
+          </button>
+        </header>
+
+        <section className="admin-card">
+          <div className="card-header">
+            <Clipboard size={20} />
+            <h3>Os Meus Episódios</h3>
+          </div>
+          <div className="card-body p-0">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Código</th>
+                  <th>Data de Entrada</th>
+                  <th>Hospital</th>
+                  <th>Estado</th>
+                  <th>Ação</th>
+                </tr>
+              </thead>
+              <tbody>
+                {meusEpisodios.map(ep => (
+                  <tr key={ep.cod_epis}>
+                    <td><strong>{ep.cod_epis}</strong></td>
+                    <td>{new Date(ep.data_h_entrada).toLocaleString()}</td>
+                    <td>{ep.id_hospital}</td>
+                    <td>
+                      <span className={`status-pill ${ep.data_h_saida ? 'active' : 'pending'}`}>
+                        {ep.data_h_saida ? 'Concluído' : 'Em Curso'}
+                      </span>
+                    </td>
+                    <td>
+                      <button className="btn-icon primary" onClick={() => verDetalhesEpisodio(ep.cod_epis)} title="Ver Detalhes">
+                        <Eye size={16} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+                {meusEpisodios.length === 0 && !loading && (
+                  <tr>
+                    <td colSpan="5" className="text-center p-5 text-muted">
+                      Não foram encontrados episódios clínicos no seu histórico.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        {/* MODAL DE DETALHES (Utente) */}
+        {selectedJourney && (
+          <div className="admin-modal-overlay">
+            <div className="admin-modal-content" style={{ maxWidth: '800px' }}>
+              <div className="modal-header">
+                <h3>Detalhes do Episódio {selectedJourney.episodio.cod_epis}</h3>
+                <button className="close-btn" onClick={() => setSelectedJourney(null)}><X size={24}/></button>
+              </div>
+              <div className="modal-body">
+                <div className="journey-summary">
+                  <div className="summary-item">
+                    <label>Data de Entrada:</label>
+                    <span>{new Date(selectedJourney.episodio.data_h_entrada).toLocaleString()}</span>
+                  </div>
+                  <div className="summary-item">
+                    <label>Hospital:</label>
+                    <span>{selectedJourney.episodio.id_hospital}</span>
+                  </div>
+                  <div className="summary-item">
+                    <label>Sintomas Iniciais:</label>
+                    <p>{selectedJourney.episodio.sintomas || 'Não registados'}</p>
+                  </div>
+                </div>
+
+                <hr className="divider" />
+
+                <div className="timeline">
+                  <h4 className="section-title"><Activity size={18} /> Percurso Clínico</h4>
+                  
+                  {/* Triagem */}
+                  {selectedJourney.triagem && (
+                    <div className="timeline-item">
+                      <div className="timeline-marker"></div>
+                      <div className="timeline-content">
+                        <h5>Triagem ({selectedJourney.triagem.prioridade})</h5>
+                        <p><strong>Data:</strong> {new Date(selectedJourney.triagem.data_h_triagem).toLocaleString()}</p>
+                        <p><strong>Sintomas:</strong> {selectedJourney.triagem.sintomas}</p>
+                        <p><strong>Sinais Vitais:</strong> Temp: {selectedJourney.triagem.temperatura}ºC | TA: {selectedJourney.triagem.tensao_arterial}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Atos Clínicos */}
+                  {selectedJourney.atos.map((ato, idx) => (
+                    <div className="timeline-item" key={idx}>
+                      <div className="timeline-marker blue"></div>
+                      <div className="timeline-content">
+                        <h5>Ato Clínico: {ato.tipo}</h5>
+                        <p><strong>Início:</strong> {new Date(ato.data_h_inicio).toLocaleString()}</p>
+                        {ato.data_h_fim && <p><strong>Fim:</strong> {new Date(ato.data_h_fim).toLocaleString()}</p>}
+                        <p><strong>Decisão:</strong> {ato.decisao_clinica}</p>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Prescrições */}
+                  {selectedJourney.prescricoes.map((p, idx) => (
+                    <div className="timeline-item" key={idx}>
+                      <div className="timeline-marker green"></div>
+                      <div className="timeline-content">
+                        <h5>Prescrição Médica</h5>
+                        <p><strong>Data:</strong> {new Date(p.data_h_presc).toLocaleString()}</p>
+                        <p><strong>Medicação:</strong> {p.medicamento} ({p.dosagem})</p>
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* Internamento */}
+                  {selectedJourney.internamento && (
+                    <div className="timeline-item">
+                      <div className="timeline-marker red"></div>
+                      <div className="timeline-content">
+                        <h5>Internamento</h5>
+                        <p><strong>Entrada:</strong> {new Date(selectedJourney.internamento.data_h_entrada).toLocaleString()}</p>
+                        <p><strong>Cama:</strong> {selectedJourney.internamento.num_cama}</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {selectedJourney.episodio.data_h_saida && (
+                    <div className="timeline-item">
+                      <div className="timeline-marker black"></div>
+                      <div className="timeline-content">
+                        <h5>Alta / Conclusão</h5>
+                        <p><strong>Data:</strong> {new Date(selectedJourney.episodio.data_h_saida).toLocaleString()}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="btn-secondary" onClick={() => setSelectedJourney(null)}>Fechar</button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <style jsx>{`
+          .timeline { margin-top: 1.5rem; }
+          .timeline-item { position: relative; padding-left: 30px; margin-bottom: 1.5rem; }
+          .timeline-marker { position: absolute; left: 0; top: 5px; width: 12px; height: 12px; border-radius: 50%; background: var(--primary); }
+          .timeline-marker.blue { background: #3b82f6; }
+          .timeline-marker.green { background: #10b981; }
+          .timeline-marker.red { background: #ef4444; }
+          .timeline-marker.black { background: #000; }
+          .timeline-item::before { content: ''; position: absolute; left: 5px; top: 20px; bottom: -20px; width: 2px; background: #e2e8f0; }
+          .timeline-item:last-child::before { display: none; }
+          .timeline-content h5 { margin-bottom: 0.25rem; color: var(--text-main); }
+          .timeline-content p { font-size: 0.85rem; color: var(--text-muted); margin: 0; }
+          .journey-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+          .summary-item label { display: block; font-size: 0.75rem; font-weight: bold; color: var(--text-muted); text-transform: uppercase; }
+          .divider { margin: 1.5rem 0; border: none; border-top: 1px solid #e2e8f0; }
+        `}</style>
+      </div>
+    );
+  }
+
+  // DASHBOARD PARA STAFF (Original)
   const cards = [
     {
       title: 'Administração',
@@ -65,7 +275,7 @@ const Dashboard = () => {
       color: '#8b5cf6'
     },
     {
-      title: 'Analytics',
+      title: 'Analítica',
       desc: 'Análise de tempos e fluxos operacionais.',
       icon: BarChart3,
       path: '/analytics',

@@ -53,7 +53,7 @@ export const ProvedorAutenticacao = ({ children }) => {
       if (erro.response?.status === 403) {
         return { sucesso: false, mfa_required: false, conta_inativa: true, erro: erro.response.data.detail };
       }
-      return { sucesso: false, erro: 'Credenciais inválidas. Verifique o utilizador e a palavra-passe.' };
+      return { sucesso: false, erro: erro.response?.data?.detail || 'Utilizador e/ou palavra-passe/PIN incorretos' };
     }
   };
 

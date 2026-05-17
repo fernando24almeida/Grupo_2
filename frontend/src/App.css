@@ -509,3 +509,5 @@ tr:last-child td {
   border-left: 4px solid var(--primary);
   background: #eff6ff;
 }
+
+.bg-disabled { background-color: #f1f5f9 !important; color: #64748b !important; cursor: not-allowed !important; }

@@ -26,11 +26,11 @@ const Layout = ({ children }) => {
   if (!utilizador) return <>{children}</>;
 
   const menuItems = [
-    { path: '/dashboard', label: 'Dashboard', icon: LayoutIcon, roles: ['ADMIN', 'MEDICO', 'ENFERMEIRO', 'RECECIONISTA'] },
+    { path: '/dashboard', label: utilizador.role === 'UTENTE' ? 'Meus Episódios' : 'Visão Geral', icon: LayoutIcon, roles: ['ADMIN', 'MEDICO', 'ENFERMEIRO', 'RECECIONISTA', 'UTENTE'] },
     { path: '/new-episode', label: 'Admissão', icon: UserPlus, roles: ['ADMIN', 'RECECIONISTA'] },
     { path: '/triage', label: 'Triagem', icon: Activity, roles: ['ENFERMEIRO'] },
     { path: '/clinical-acts', label: 'Atos Clínicos', icon: Clipboard, roles: ['MEDICO'] },
-    { path: '/analytics', label: 'Analytics', icon: BarChart3, roles: ['ADMIN', 'MEDICO', 'ENFERMEIRO', 'RECECIONISTA'] },
+    { path: '/analytics', label: 'Analítica', icon: BarChart3, roles: ['ADMIN', 'MEDICO', 'ENFERMEIRO', 'RECECIONISTA'] },
   ];
 
   if (utilizador.role === 'ADMIN') {
@@ -71,7 +71,7 @@ const Layout = ({ children }) => {
           </Link>
           <div className="user-info" style={{ marginBottom: '1rem', padding: '0 1rem', fontSize: '0.875rem', color: '#94a3b8' }}>
             <p style={{ color: 'white', fontWeight: 600 }}>{utilizador.nome_utilizador}</p>
-            <p>{utilizador.hospital}</p>
+            {utilizador.role !== 'UTENTE' && <p>{utilizador.hospital}</p>}
           </div>
           <button onClick={handleLogout} className="nav-item" style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer' }}>
             <LogOut size={20} />

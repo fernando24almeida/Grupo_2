@@ -39,6 +39,7 @@ def inicializar_bd():
         from sqlalchemy import text
         colunas_necessarias = [
             ("utente", "parentesco", "VARCHAR(100)"),
+            ("utente", "id_role", "INT REFERENCES role(id_role)"),
             ("episodio_urgencia", "id_utilizador_rececao", "INT REFERENCES utilizador(id_utilizador)"),
             ("ato", "diagnostico", "TEXT"),
             ("ato", "notas_clinicas", "TEXT"),
@@ -113,10 +114,27 @@ def inicializar_bd():
                 PapelUtilizador(nome="MEDICO"),
                 PapelUtilizador(nome="ENFERMEIRO"),
                 PapelUtilizador(nome="RECECIONISTA"),
-                PapelUtilizador(nome="TECNICO")
+                PapelUtilizador(nome="TECNICO"),
+                PapelUtilizador(nome="UTENTE")
             ]
             sessao.add_all(papeis)
             sessao.commit()
+        else:
+            # Garantir que o papel UTENTE existe mesmo que outros já existam
+            utente_role = sessao.exec(select(PapelUtilizador).where(PapelUtilizador.nome == "UTENTE")).first()
+            if not utente_role:
+                sessao.add(PapelUtilizador(nome="UTENTE"))
+                sessao.commit()
+            
+        # Atribuir id_role UTENTE a todos os utentes que não têm
+        papel_utente = sessao.exec(select(PapelUtilizador).where(PapelUtilizador.nome == "UTENTE")).one()
+        utentes_sem_role = sessao.exec(select(Utente).where(Utente.id_role == None)).all()
+        for u in utentes_sem_role:
+            u.id_role = papel_utente.id_role
+            sessao.add(u)
+        if utentes_sem_role:
+            sessao.commit()
+            print(f"[SUCCESS] Atribuído papel UTENTE a {len(utentes_sem_role)} utentes.")
             
         # Check if services exist
         servicos_existentes = sessao.exec(select(ServicoHospitalar)).first()

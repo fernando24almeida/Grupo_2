@@ -84,6 +84,8 @@ const Login = () => {
     }
   };
 
+  const isNIF = /^\d+$/.test(nomeUtilizador);
+
   return (
     <div className="login-page">
       <div className="login-card">
@@ -117,12 +119,12 @@ const Login = () => {
           {!mfaRequired ? (
             <>
               <div className="form-group">
-                <label>Utilizador</label>
+                <label>{isNIF ? 'Número de Utente (NIF)' : 'Utilizador / E-mail'}</label>
                 <div style={{ position: 'relative' }}>
                   <User size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                   <input 
                     type="text" 
-                    placeholder="nome.utilizador" 
+                    placeholder={isNIF ? "Introduza o seu NIF" : "nome.utilizador ou email"} 
                     style={{ paddingLeft: '40px' }}
                     value={nomeUtilizador} 
                     onChange={(e) => setNomeUtilizador(e.target.value)} 
@@ -132,12 +134,13 @@ const Login = () => {
               </div>
 
               <div className="form-group">
-                <label>Palavra-passe</label>
+                <label>{isNIF ? 'PIN de Acesso' : 'Palavra-passe'}</label>
                 <div style={{ position: 'relative' }}>
                   <Lock size={18} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                   <input 
                     type="password" 
-                    placeholder="••••••••" 
+                    placeholder={isNIF ? "PIN de 6 dígitos" : "••••••••"} 
+                    maxLength={isNIF ? 6 : undefined}
                     style={{ paddingLeft: '40px' }}
                     value={palavraPasse} 
                     onChange={(e) => setPalavraPasse(e.target.value)} 
@@ -151,7 +154,7 @@ const Login = () => {
                     style={{ fontSize: '0.8rem', color: 'var(--primary)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
                     onClick={() => navigate('/forgot-password')}
                   >
-                    Esqueceu-se dos dados?
+                    Esqueceu-se da palavra-passe/PIN?
                   </button>
                 </div>
               </div>

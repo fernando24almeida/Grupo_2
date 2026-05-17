@@ -9,7 +9,7 @@ import string
 from ..core.db import obter_sessao
 from ..models.models import (
     Utente, EpisodioUrgencia, Triagem, Ato, Prescricao, Internamento, 
-    Hospital, Envolve, FuncionarioHospital, ServicoHospitalar, Utilizador, EmailValidation, AuditLog
+    Hospital, Envolve, FuncionarioHospital, ServicoHospitalar, Utilizador, EmailValidation, AuditLog, PapelUtilizador
 )
 from ..core.security import (
     RoleChecker, obter_utilizador_atual, obter_hash_palavra_passe, 
@@ -46,6 +46,7 @@ class AtualizarUtente(BaseModel):
     localidade: Optional[str] = None
     data_nascimento: Optional[datetime] = None
     ativo: Optional[bool] = None
+    password: Optional[str] = None
 
 class AtualizarHospital(BaseModel):
     local_hosp: Optional[str] = None
@@ -282,10 +283,19 @@ def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao:
         except ValueError:
             raise HTTPException(status_code=400, detail="Formato de data de nascimento inválido. Use AAAA-MM-DD.")
     
-    # 4. Gerar PIN temporário
+    # 4. Obter papel UTENTE
+    papel_utente = sessao.exec(select(PapelUtilizador).where(PapelUtilizador.nome == "UTENTE")).first()
+    if not papel_utente:
+        # Fallback caso não exista (não deve acontecer após inicializar_bd)
+        papel_utente = PapelUtilizador(nome="UTENTE")
+        sessao.add(papel_utente)
+        sessao.commit()
+        sessao.refresh(papel_utente)
+
+    # 5. Gerar PIN temporário
     pin_temporario = ''.join(random.choices(string.digits, k=6))
     
-    # 5. Criar objeto Utente
+    # 6. Criar objeto Utente
     novo_utente = Utente(
         num_utente=dados.num_utente,
         nome=dados.nome,
@@ -298,10 +308,11 @@ def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao:
         password_hash=obter_hash_palavra_passe(pin_temporario),
         ativo=False,
         primeiro_acesso=True,
-        parentesco=dados.parentesco
+        parentesco=dados.parentesco,
+        id_role=papel_utente.id_role
     )
     
-    # 6. Gerar código de ativação
+    # 7. Gerar código de ativação
     codigo_ativacao = f"{random.randint(100000, 999999)}"
     
     try:
@@ -362,7 +373,7 @@ def alterar_pin_utente(dados: AlterarPinUtente, sessao: Session = Depends(obter_
     sessao.add(utente)
     sessao.commit()
     
-    return {"message": "PIN alterado com sucesso. Já pode aceder à App."}
+    return {"message": "PIN alterado com sucesso. Já pode aceder ao Portal e à App."}
 
 @router.get("/utentes", response_model=List[Utente])
 def ler_utentes(sessao: Session = Depends(obter_sessao)):
@@ -375,8 +386,10 @@ async def reenviar_ativacao_utente(num_utente: int, background_tasks: Background
     if not utente:
         raise HTTPException(status_code=404, detail="Utente não encontrado")
     
-    if utente.ativo:
-        raise HTTPException(status_code=400, detail="Este utente já tem a conta ativa.")
+    if not utente.email:
+        raise HTTPException(status_code=400, detail="Este utente não tem e-mail registado. Por favor, atualize os dados primeiro.")
+    
+    # Removida restrição de conta ativa para permitir recuperação de PIN/Código
 
     # 1. Gerar novo PIN temporário
     pin_temporario = ''.join(random.choices(string.digits, k=6))
@@ -402,11 +415,11 @@ async def reenviar_ativacao_utente(num_utente: int, background_tasks: Background
         # Enviar e-mail
         background_tasks.add_task(enviar_email_ativacao, utente.email, utente.nome, f"{codigo_ativacao} (PIN Mobile: {pin_temporario})")
         
-        log_audit(sessao, admin.id_utilizador, "RESEND_ACTIVATION", "utente", str(num_utente), f"Novo PIN e código enviados para {utente.email}")
+        log_audit(sessao, admin.id_utilizador, "RESEND_DATA", "utente", str(num_utente), f"Novo PIN e código enviados para {utente.email}")
         
-        print(f"\n📧 [DEBUG REENVIO] Utente {utente.num_utente} | Novo PIN: {pin_temporario} | Novo Código: {codigo_ativacao}\n")
+        print(f"\n📧 [DEBUG REENVIO UTENTE] Utente {utente.num_utente} | Novo PIN: {pin_temporario} | Novo Código: {codigo_ativacao}\n")
         
-        return {"message": "Novo PIN e código de ativação enviados com sucesso."}
+        return {"message": "Novas credenciais de acesso enviadas com sucesso por e-mail."}
     except Exception as e:
         sessao.rollback()
         raise HTTPException(status_code=500, detail=f"Erro ao processar reenvio: {str(e)}")
@@ -427,12 +440,22 @@ def alternar_estado_utente(num_utente: int, sessao: Session = Depends(obter_sess
     
     return {"message": f"Utente {'reativado' if utente.ativo else 'suspenso'} com sucesso."}
 
-@router.patch("/utentes/{num_utente}", response_model=Utente, dependencies=[Depends(admin_only)])
-def atualizar_utente(num_utente: int, utente_in: AtualizarUtente, sessao: Session = Depends(obter_sessao)):
+@router.patch("/utentes/{num_utente}", response_model=Utente)
+def atualizar_utente(
+    num_utente: int, 
+    utente_in: AtualizarUtente, 
+    sessao: Session = Depends(obter_sessao),
+    utilizador = Depends(RoleChecker(["ADMIN", "MEDICO", "ENFERMEIRO", "RECECIONISTA"]))
+):
     db_utente = sessao.get(Utente, num_utente)
     if not db_utente:
         raise HTTPException(status_code=404, detail="Utente não encontrado")
     dados = utente_in.dict(exclude_unset=True)
+    
+    # Apenas ADMIN pode alterar o estado 'ativo'
+    if "ativo" in dados and getattr(utilizador, "role_name", "") != "ADMIN":
+        del dados["ativo"]
+
     for chave, valor in dados.items():
         setattr(db_utente, chave, valor)
     sessao.add(db_utente)
@@ -448,6 +471,41 @@ def eliminar_utente(num_utente: int, sessao: Session = Depends(obter_sessao)):
     sessao.delete(db_utente)
     sessao.commit()
     return {"message": "Utente eliminado com sucesso"}
+
+# PERFIL UTENTE (Self-service)
+@router.get("/utentes/me", response_model=Utente)
+def obter_meu_perfil_utente(utilizador = Depends(obter_utilizador_atual)):
+    if getattr(utilizador, "role_name", None) != "UTENTE":
+        raise HTTPException(status_code=403, detail="Apenas utentes podem aceder a este perfil")
+    return utilizador
+
+@router.patch("/utentes/me", response_model=Utente)
+def atualizar_meu_perfil_utente(dados: AtualizarUtente, sessao: Session = Depends(obter_sessao), utilizador = Depends(obter_utilizador_atual)):
+    if getattr(utilizador, "role_name", None) != "UTENTE":
+        raise HTTPException(status_code=403, detail="Apenas utentes podem atualizar este perfil")
+    
+    # Obter o objeto da sessão para poder atualizar
+    db_utente = sessao.get(Utente, utilizador.num_utente)
+    
+    update_data = dados.dict(exclude_unset=True)
+    # Impedir que o utente mude o próprio estado de ativo (apenas admin)
+    if "ativo" in update_data:
+        del update_data["ativo"]
+        
+    # Tratar atualização de PIN/Password
+    if "password" in update_data and update_data["password"]:
+        # Atualizamos o hash e marcamos que já não é o primeiro acesso
+        db_utente.password_hash = obter_hash_palavra_passe(update_data["password"])
+        db_utente.primeiro_acesso = False
+        del update_data["password"]
+
+    for chave, valor in update_data.items():
+        setattr(db_utente, chave, valor)
+        
+    sessao.add(db_utente)
+    sessao.commit()
+    sessao.refresh(db_utente)
+    return db_utente
 
 # EPISODIOS
 @router.post("/episodes", response_model=EpisodioUrgencia)
@@ -504,13 +562,34 @@ def criar_episodio(dados_epis: CriarEpisodio, sessao: Session = Depends(obter_se
     sessao.refresh(db_episodio)
     return db_episodio
 
+def obter_utilizador_opcional(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    token = auth_header.split(" ")[1]
+    try:
+        return obter_utilizador_atual(token)
+    except:
+        return None
+
 @router.get("/episodes", response_model=List[EpisodioUrgencia])
 def ler_episodios(
     id_hospital: Optional[str] = None, 
     em_aberto: Optional[bool] = None,
-    sessao: Session = Depends(obter_sessao)
+    sessao: Session = Depends(obter_sessao),
+    utilizador = Depends(obter_utilizador_opcional)
 ):
     query = select(EpisodioUrgencia)
+    
+    # Se houver um utilizador logado, verificar o seu papel na BD
+    if utilizador:
+        papel = sessao.get(PapelUtilizador, utilizador.id_role)
+        nome_papel = papel.nome if papel else "USER"
+        
+        # Se for utente logado, filtrar obrigatoriamente pelos seus episódios
+        if nome_papel == "UTENTE":
+            query = query.where(EpisodioUrgencia.id_utente == utilizador.num_utente)
+    
     if id_hospital:
         query = query.where(EpisodioUrgencia.id_hospital == id_hospital)
     
@@ -614,12 +693,25 @@ def obter_equipa_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)
         
     return equipa
 
-@router.get("/episodes/{cod_epis}/journey", dependencies=[Depends(admin_only)])
-def obter_percurso_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
+@router.get("/episodes/{cod_epis}/journey")
+def obter_percurso_episodio(
+    cod_epis: str, 
+    sessao: Session = Depends(obter_sessao),
+    utilizador = Depends(obter_utilizador_atual)
+):
     episodio = sessao.get(EpisodioUrgencia, cod_epis)
     if not episodio:
         raise HTTPException(status_code=404, detail="Episódio não encontrado")
     
+    # Validar Permissões
+    role = getattr(utilizador, "role_name", "USER")
+    if role == "UTENTE":
+        if episodio.id_utente != utilizador.num_utente:
+            raise HTTPException(status_code=403, detail="Não tem permissão para aceder a este episódio")
+    elif role != "ADMIN":
+        # Se não for admin nem o próprio utente, bloquear (comportamento original era admin_only)
+        raise HTTPException(status_code=403, detail="Apenas administradores podem aceder ao percurso global")
+
     utente = sessao.get(Utente, episodio.id_utente)
     
     # Triagem com LEFT JOIN
@@ -857,9 +949,15 @@ def registar_triagem_manchester(dados: CriarTriagem, sessao: Session = Depends(o
     return db_triagem
 
 @router.get("/utentes/{num_utente}/history")
-def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sessao), utilizador: Utilizador = Depends(obter_utilizador_atual)):
-    # Validar se o utilizador tem permissão (Médico, Enfermeiro ou Admin)
-    RoleChecker(["ADMIN", "MEDICO", "ENFERMEIRO"])(utilizador)
+def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sessao), utilizador = Depends(obter_utilizador_atual)):
+    # Validar se o utilizador tem permissão (Médico, Enfermeiro, Admin ou o próprio Utente)
+    role = getattr(utilizador, "role_name", "USER")
+    
+    if role == "UTENTE":
+        if int(utilizador.num_utente) != num_utente:
+            raise HTTPException(status_code=403, detail="Apenas pode aceder ao seu próprio histórico")
+    elif role not in ["ADMIN", "MEDICO", "ENFERMEIRO"]:
+        raise HTTPException(status_code=403, detail="Não tem permissão para aceder a este histórico")
     
     # 1. Obter todos os episódios do utente
     episodios = sessao.exec(

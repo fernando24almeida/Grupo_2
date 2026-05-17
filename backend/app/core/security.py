@@ -26,9 +26,9 @@ def criar_token_acesso(dados: dict, expira_delta: timedelta = None):
     return jwt_codificado
 
 def obter_utilizador_atual(token: str = Depends(oauth2_scheme)):
-    # Importação local para evitar erro circular (Circular Import)
-    from .db import obter_sessao
-    from ..models.models import Utilizador
+    # Importação local para evitar erro circular
+    from .db import motor
+    from ..models.models import Utilizador, Utente
     from sqlmodel import Session, select
 
     credentials_exception = HTTPException(
@@ -36,23 +36,58 @@ def obter_utilizador_atual(token: str = Depends(oauth2_scheme)):
         detail="Não foi possível validar as credenciais",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
     try:
-        payload = jwt.decode(token, configuracoes.SECRET_KEY, algorithms=[configuracoes.ALGORITHM])
-        username: str = payload.get("sub")
-        if username is None:
-            raise credentials_exception
+        # Descodificar o token
+        payload = jwt.decode(
+            token, 
+            configuracoes.SECRET_KEY, 
+            algorithms=[configuracoes.ALGORITHM],
+            options={"verify_aud": False}
+        )
+        username = payload.get("sub")
         
-        # Obter sessão manualmente dentro da função
-        from .db import motor
-        with Session(motor) as sessao:
-            utilizador = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == username)).first()
-            if not utilizador:
-                raise credentials_exception
+        if not username:
+            raise credentials_exception
             
-            # Detach do objeto para poder ser usado fora da sessão
-            sessao.expunge(utilizador)
-            return utilizador
-    except JWTError:
+        print(f"DEBUG AUTH: Decoded username='{username}'")
+        with Session(motor) as sessao:
+            # 1. Tentar encontrar como Staff (Utilizador)
+            query = select(Utilizador).where(Utilizador.nome_utilizador == str(username))
+            staff = sessao.exec(query).first()
+            print(f"DEBUG AUTH: Staff found? {staff is not None}")
+            if staff:
+                from ..models.models import PapelUtilizador
+                papel = sessao.get(PapelUtilizador, staff.id_role)
+                staff.role_name = papel.nome if papel else "USER"
+                sessao.expunge(staff)
+                return staff
+
+            # 2. Tentar encontrar como Utente
+            try:
+                # Pode ser num_utente (int) ou o email (str)
+                if str(username).isdigit():
+                    user_id = int(username)
+                    utente = sessao.get(Utente, user_id)
+                else:
+                    utente = sessao.exec(select(Utente).where(Utente.email == str(username))).first()
+
+                if utente:
+                    from ..models.models import PapelUtilizador
+                    papel = sessao.get(PapelUtilizador, utente.id_role)
+                    utente.role_name = papel.nome if papel else "UTENTE"
+                    sessao.expunge(utente)
+                    return utente
+            except:
+                pass
+
+                
+            raise credentials_exception
+
+    except (JWTError, Exception) as e:
+        print(f"DEBUG AUTH ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise credentials_exception
 
 class RoleChecker:
@@ -60,10 +95,10 @@ class RoleChecker:
         self.allowed_roles = allowed_roles
 
     def __call__(self, user = Depends(obter_utilizador_atual)):
-        # Verificar o papel do utilizador através da tabela de papéis ou ID
-        # No seu sistema, o papel está no ID_ROLE. Vamos obter o nome.
+        # COMPORTAMENTO ROBUSTO: Procurar papel na base de dados
         from ..models.models import PapelUtilizador
         from .db import motor
+        
         with Session(motor) as sessao:
             papel = sessao.get(PapelUtilizador, user.id_role)
             nome_papel = papel.nome if papel else "USER"

@@ -2,6 +2,8 @@ from sqlmodel import SQLModel, Field, Column, String, ForeignKey, Integer, Boole
 from typing import Optional, List
 from datetime import datetime, date
 
+from pydantic import ConfigDict
+
 class PapelUtilizador(SQLModel, table=True):
     __tablename__ = "role"
     id_role: Optional[int] = Field(default=None, primary_key=True)
@@ -20,6 +22,9 @@ class Utilizador(SQLModel, table=True):
     num_func: Optional[int] = Field(default=None, foreign_key="funcionario_hospital.num_func")
     id_role: int = Field(foreign_key="role.id_role") # Coincide com o nome físico
     ativo: bool = Field(default=False)
+    role_name: Optional[str] = None
+    
+    model_config = ConfigDict(extra="allow")
 
 class EmailValidation(SQLModel, table=True):
     __tablename__ = "email_validation"
@@ -65,6 +70,10 @@ class Utente(SQLModel, table=True):
     ativo: bool = Field(default=False)
     primeiro_acesso: bool = Field(default=True)
     parentesco: Optional[str] = None # Grau de parentesco com o titular do email
+    id_role: Optional[int] = Field(default=None, foreign_key="role.id_role")
+    role_name: Optional[str] = None
+
+    model_config = ConfigDict(extra="allow")
 
 class FuncionarioHospital(SQLModel, table=True):
     __tablename__ = "funcionario_hospital"

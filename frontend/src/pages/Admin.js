@@ -370,6 +370,111 @@ const Admin = () => {
           </div>
         )}
 
+        {/* MODAL DE EDIÇÃO */}
+        {editingItem && (
+          <div className="admin-modal-overlay">
+            <div className="admin-modal-content">
+              <div className="modal-header">
+                <h3>Editar {editingItem.type === 'utente' ? 'Utente' : 'Utilizador'}</h3>
+                <button className="close-btn" onClick={() => setEditingItem(null)}><X size={24}/></button>
+              </div>
+              <form onSubmit={handleUpdate} className="standard-form">
+                {editingItem.type === 'utente' ? (
+                  <>
+                    <div className="form-group">
+                      <label>NIF (Não editável)</label>
+                      <input type="text" value={editingItem.data.num_utente} disabled className="bg-disabled" />
+                    </div>
+                    <div className="form-group">
+                      <label>Nome Completo</label>
+                      <input 
+                        type="text" 
+                        value={editingItem.data.nome} 
+                        onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, nome: e.target.value}})}
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Email</label>
+                      <input 
+                        type="email" 
+                        value={editingItem.data.email || ''} 
+                        onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, email: e.target.value}})}
+                        placeholder="Insira o e-mail para envio de credenciais"
+                      />
+                    </div>
+                    <div className="form-row">
+                      <div className="form-group">
+                        <label>Telemóvel</label>
+                        <input 
+                          type="text" 
+                          value={editingItem.data.telemovel || ''} 
+                          onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, telemovel: e.target.value}})}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Sexo</label>
+                        <select 
+                          value={editingItem.data.sexo} 
+                          onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, sexo: e.target.value}})}
+                        >
+                          <option value="M">Masculino</option>
+                          <option value="F">Feminino</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label>Morada</label>
+                      <input 
+                        type="text" 
+                        value={editingItem.data.morada || ''} 
+                        onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, morada: e.target.value}})}
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="form-group">
+                      <label>Username (Não editável)</label>
+                      <input type="text" value={editingItem.data.nome_utilizador} disabled className="bg-disabled" />
+                    </div>
+                    <div className="form-group">
+                      <label>Nome Completo</label>
+                      <input 
+                        type="text" 
+                        value={editingItem.data.nome_completo} 
+                        onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, nome_completo: e.target.value}})}
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Email</label>
+                      <input 
+                        type="email" 
+                        value={editingItem.data.email} 
+                        onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, email: e.target.value}})}
+                        required
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Nova Password (deixe vazio para manter)</label>
+                      <input 
+                        type="password" 
+                        value={editingItem.data.palavra_passe || ''} 
+                        onChange={e => setEditingItem({...editingItem, data: {...editingItem.data, palavra_passe: e.target.value}})}
+                      />
+                    </div>
+                  </>
+                )}
+                <div className="modal-footer">
+                  <button type="button" className="btn-secondary" onClick={() => setEditingItem(null)}>Cancelar</button>
+                  <button type="submit" className="btn-primary">Guardar Alterações</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
         {/* MODAL DE PERCURSO DO EPISÓDIO */}
         {journeyEpisode && (
           <div className="admin-modal-overlay">
@@ -576,9 +681,16 @@ const Admin = () => {
                     <tr key={u.num_utente}>
                       <td>{u.num_utente}</td>
                       <td>{u.nome}</td>
-                      <td>{u.email}</td>
+                      <td>{u.email || <span className="text-danger">Sem E-mail</span>}</td>
                       <td><span className={`status-pill ${u.ativo ? 'active' : 'pending'}`}>{u.ativo ? 'Ativo' : 'Pendente'}</span></td>
                       <td className="actions">
+                        <button 
+                          className="btn-icon primary" 
+                          onClick={() => setEditingItem({ type: 'utente', data: { ...u } })}
+                          title="Editar Utente"
+                        >
+                          <Edit2 size={16}/>
+                        </button>
                         <button 
                           className={`btn-icon ${u.ativo ? 'warning' : 'success'}`} 
                           onClick={() => toggleUtenteStatus(u.num_utente, u.ativo)}
@@ -586,15 +698,20 @@ const Admin = () => {
                         >
                           <ShieldCheck size={16}/>
                         </button>
-                        {!u.ativo && (
-                          <button 
-                            className="btn-icon primary" 
-                            onClick={() => resendUtenteActivation(u.num_utente)}
-                            title="Reenviar PIN e Ativação"
-                          >
-                            <Mail size={16}/>
-                          </button>
-                        )}
+                        <button 
+                          className="btn-icon primary" 
+                          onClick={() => {
+                            if (!u.email) {
+                              setMensagem({ tipo: 'warning', texto: 'Utente sem e-mail. Por favor, atualize os dados primeiro.' });
+                              setEditingItem({ type: 'utente', data: { ...u } });
+                            } else {
+                              resendUtenteActivation(u.num_utente);
+                            }
+                          }}
+                          title="Reenviar PIN e Ativação"
+                        >
+                          <Mail size={16}/>
+                        </button>
                         <button className="btn-icon danger" onClick={() => handleDelete('utente', u.num_utente)}><Trash2 size={16}/></button>
                       </td>
                     </tr>
@@ -621,21 +738,26 @@ const Admin = () => {
                       <td><span className={`status-pill ${u.ativo ? 'active' : 'pending'}`}>{u.ativo ? 'Ativo' : 'Pendente'}</span></td>
                       <td className="actions">
                         <button 
+                          className="btn-icon primary" 
+                          onClick={() => setEditingItem({ type: 'user', data: { ...u } })}
+                          title="Editar Utilizador"
+                        >
+                          <Edit2 size={16}/>
+                        </button>
+                        <button 
                           className={`btn-icon ${u.ativo ? 'warning' : 'success'}`} 
                           onClick={() => toggleUserStatus(u.id_utilizador, u.ativo)}
                           title={u.ativo ? 'Suspender Utilizador' : 'Ativar Utilizador'}
                         >
                           <ShieldCheck size={16}/>
                         </button>
-                        {!u.ativo && (
-                          <button 
-                            className="btn-icon primary" 
-                            onClick={() => resendUserActivation(u.id_utilizador)}
-                            title="Reenviar E-mail de Ativação"
-                          >
-                            <Mail size={16}/>
-                          </button>
-                        )}
+                        <button 
+                          className="btn-icon primary" 
+                          onClick={() => resendUserActivation(u.id_utilizador)}
+                          title="Reenviar E-mail de Ativação"
+                        >
+                          <Mail size={16}/>
+                        </button>
                         <button className="btn-icon danger" onClick={() => handleDelete('user', u.id_utilizador)}><Trash2 size={16}/></button>
                       </td>
                     </tr>
@@ -724,14 +846,20 @@ const Admin = () => {
                 <input type="text" placeholder="Filtrar auditoria..." value={filtros.audit} onChange={e => setFiltros({...filtros, audit: e.target.value})} />
               </div>
               <table className="admin-table">
-                <thead><tr><th>Data</th><th>Ação</th><th>Recurso</th><th>Utilizador</th><th>IP</th></tr></thead>
+                <thead><tr><th>Data</th><th>Ação</th><th>Alvo / Recurso</th><th>Executado por</th><th>IP</th></tr></thead>
                 <tbody>
                   {auditLogs.filter(l => l.acao.includes(filtros.audit.toUpperCase())).map((l, idx) => (
                     <tr key={idx}>
                       <td>{new Date(l.data_hora).toLocaleString()}</td>
                       <td><span className="badge">{l.acao}</span></td>
-                      <td>{l.recurso}</td>
-                      <td>ID: {l.id_utilizador}</td>
+                      <td>
+                        {l.recurso === 'utente' && l.nome_recurso ? (
+                          <strong>{l.nome_recurso}</strong>
+                        ) : (
+                          <span>{l.recurso} {l.id_recurso && `(${l.id_recurso})`}</span>
+                        )}
+                      </td>
+                      <td>{l.nome_utilizador || `ID: ${l.id_utilizador}`}</td>
                       <td>{l.ip_origem}</td>
                     </tr>
                   ))}

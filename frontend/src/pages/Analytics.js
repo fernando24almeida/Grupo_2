@@ -356,7 +356,7 @@ const Analytics = () => {
     <div className="analytics-page">
       <header className="page-header">
         <div>
-          <h1 className="page-title">Analytics & Insights</h1>
+          <h1 className="page-title">Analítica & Insights</h1>
           <p style={{ color: 'var(--text-muted)' }}>Hospital: {utilizador?.hospital || 'Todos os Hospitais'}</p>
         </div>
         <div className="header-actions">

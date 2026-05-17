@@ -5,6 +5,7 @@ import base64
 import random
 import re
 import uuid
+import string
 from datetime import datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
@@ -13,7 +14,7 @@ from pydantic import BaseModel, EmailStr, ConfigDict
 from typing import Optional, List
 from ..core.db import obter_sessao
 from ..core.security import verificar_palavra_passe, criar_token_acesso, obter_hash_palavra_passe, RoleChecker, obter_utilizador_atual
-from ..models.models import Utilizador, PapelUtilizador, FuncionarioHospital, Medico, Enfermeiro, EmailValidation, PasswordReset, AuditLog
+from ..models.models import Utilizador, PapelUtilizador, FuncionarioHospital, Medico, Enfermeiro, EmailValidation, PasswordReset, AuditLog, Utente
 from ..core.audit import log_audit
 from ..core.email import enviar_email_ativacao, enviar_email_recuperacao_username, enviar_email_recuperacao_password
 
@@ -30,6 +31,8 @@ class LerAuditLog(BaseModel):
     detalhes: Optional[str]
     ip_origem: Optional[str]
     data_hora: datetime
+    nome_utilizador: Optional[str] = None
+    nome_recurso: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 class LoginMFA(BaseModel):
@@ -37,7 +40,8 @@ class LoginMFA(BaseModel):
     mfa_code: str
 
 class RecuperarConta(BaseModel):
-    email: EmailStr
+    email: Optional[EmailStr] = None
+    num_utente: Optional[int] = None
 
 class RedefinirPassword(BaseModel):
     token: str
@@ -100,47 +104,63 @@ class CriarProfissional(BaseModel):
 # --- AUTENTICAÇÃO ---
 @router.post("/login")
 def entrar(request: Request, dados_form: OAuth2PasswordRequestForm = Depends(), sessao: Session = Depends(obter_sessao)):
+    # Identificar o tipo de erro padrão baseado no input
+    is_nif = dados_form.username.isdigit()
+    err_msg_utente = "Número de Utente e/ou PIN de acesso incorretos"
+    err_msg_staff = "Nome de Utilizador e/ou palavra-passe incorretos"
+    
+    # 1. Tentar encontrar na tabela Utilizador (Staff)
     utilizador = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == dados_form.username)).first()
     
-    if not utilizador or not verificar_palavra_passe(dados_form.password, utilizador.hash_palavra_passe):
-        raise HTTPException(status_code=401, detail="Credenciais incorretas")
-    
-    if not utilizador.ativo:
-        raise HTTPException(status_code=403, detail="Esta conta ainda não foi ativada.")
-    
-    if utilizador.mfa_ativo:
-        return {"mfa_required": True, "mfa_setup_complete": True, "username": utilizador.nome_utilizador}
-    else:
-        papel = sessao.get(PapelUtilizador, utilizador.id_role)
-        if papel and papel.nome == "ADMIN":
-            token_acesso = criar_token_acesso(dados={"sub": utilizador.nome_utilizador, "role": papel.nome})
-            print(f"DEBUG: Login ADMIN bem-sucedido para {utilizador.nome_utilizador}. Token gerado.")
-            return {"access_token": token_acesso, "token_type": "bearer", "role": papel.nome}
+    # 2. Se não encontrar, tentar na tabela Utente
+    utente = None
+    if not utilizador:
+        # Pode ser num_utente ou email
+        if is_nif:
+            utente = sessao.get(Utente, int(dados_form.username))
+        else:
+            utente = sessao.exec(select(Utente).where(Utente.email == dados_form.username)).first()
             
-        if not utilizador.mfa_secret:
-            utilizador.mfa_secret = pyotp.random_base32()
-            sessao.add(utilizador)
-            sessao.commit()
+    # Validar credenciais para Utilizador
+    if utilizador:
+        if not verificar_palavra_passe(dados_form.password, utilizador.hash_palavra_passe):
+            raise HTTPException(status_code=401, detail=err_msg_staff)
+        
+        if not utilizador.ativo:
+            raise HTTPException(status_code=403, detail="Esta conta ainda não foi ativada.")
+        
+        if utilizador.mfa_ativo:
+            return {"mfa_required": True, "mfa_setup_complete": True, "username": utilizador.nome_utilizador}
+        else:
+            papel = sessao.get(PapelUtilizador, utilizador.id_role)
+            role_name = papel.nome if papel else "USER"
+            token_acesso = criar_token_acesso(dados={"sub": utilizador.nome_utilizador, "role": role_name})
+            return {"access_token": token_acesso, "token_type": "bearer", "role": role_name}
+
+    # Validar credenciais para Utente
+    if utente:
+        if not utente.password_hash or not verificar_palavra_passe(dados_form.password, utente.password_hash):
+            raise HTTPException(status_code=401, detail=err_msg_utente)
             
-        totp_url = pyotp.totp.TOTP(utilizador.mfa_secret).provisioning_uri(name=utilizador.nome_utilizador, issuer_name="PortalClinico_G2")
+        if not utente.ativo:
+            raise HTTPException(status_code=403, detail="Conta não ativada. Verifique o seu e-mail.")
+            
+        papel = sessao.get(PapelUtilizador, utente.id_role)
+        role_name = papel.nome if papel else "UTENTE"
         
-        # Gerar QR Code localmente (Base64) em vez de usar API externa
-        qr = qrcode.QRCode(version=1, box_size=10, border=5)
-        qr.add_data(totp_url)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="black", back_color="white")
-        buffered = io.BytesIO()
-        img.save(buffered, format="PNG")
-        qr_code_base64 = base64.b64encode(buffered.getvalue()).decode()
-        
+        token_acesso = criar_token_acesso(dados={"sub": str(utente.num_utente), "role": role_name})
         return {
-            "mfa_required": True, 
-            "mfa_setup_complete": False, 
-            "username": utilizador.nome_utilizador, 
-            "qr_code_url": totp_url, 
-            "qr_code_image": f"data:image/png;base64,{qr_code_base64}",
-            "secret": utilizador.mfa_secret
+            "access_token": token_acesso, 
+            "token_type": "bearer", 
+            "role": role_name,
+            "utente": {
+                "num_utente": utente.num_utente,
+                "nome": utente.nome
+            }
         }
+
+    # Se nada foi encontrado, dar a mensagem baseada no formato do input
+    raise HTTPException(status_code=401, detail=err_msg_utente if is_nif else err_msg_staff)
 
 @router.post("/login/mfa")
 def verificar_mfa(request: Request, dados: LoginMFA, sessao: Session = Depends(obter_sessao)):
@@ -202,20 +222,78 @@ def ativar_conta(dados: ValidarCodigo, sessao: Session = Depends(obter_sessao)):
 # --- RECUPERAÇÃO DE CONTA ---
 @router.post("/forgot-username")
 async def recuperar_utilizador(dados: RecuperarConta, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
-    email_limpo = dados.email.lower().strip()
-    utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == email_limpo)).first()
-    
-    if utilizador:
-        background_tasks.add_task(enviar_email_recuperacao_username, email_limpo, utilizador.nome_completo, utilizador.nome_utilizador)
+    # 1. Recuperação por num_utente (App Mobile)
+    if dados.num_utente:
+        utente = sessao.get(Utente, dados.num_utente)
+        if utente:
+            background_tasks.add_task(enviar_email_recuperacao_username, utente.email, utente.nome, str(utente.num_utente))
+        return {"message": "Se o número de utente existir no nosso sistema, receberá os dados por e-mail."}
+
+    # 2. Recuperação por e-mail (Portal Staff ou Utentes)
+    if dados.email:
+        email_limpo = dados.email.lower().strip()
+        
+        # Tentar Utilizador (Staff)
+        utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == email_limpo)).first()
+        if utilizador:
+            background_tasks.add_task(enviar_email_recuperacao_username, email_limpo, utilizador.nome_completo, utilizador.nome_utilizador)
+        
+        # Tentar Utente (Mobile)
+        utente = sessao.exec(select(Utente).where(Utente.email == email_limpo)).first()
+        if utente:
+            background_tasks.add_task(enviar_email_recuperacao_username, email_limpo, utente.nome, str(utente.num_utente))
     
     # Retornamos sempre sucesso por segurança (não enumerar utilizadores)
     return {"message": "Se o e-mail existir no nosso sistema, receberá os dados em breve."}
 
 @router.post("/forgot-password")
 async def recuperar_password(dados: RecuperarConta, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
+    # 1. Recuperação por num_utente (App Mobile / Utentes)
+    if dados.num_utente:
+        utente = sessao.get(Utente, dados.num_utente)
+        if utente:
+            # Gerar novo PIN e código de ativação (mesma lógica que clinical.py)
+            pin_temporario = ''.join(random.choices(string.digits, k=6))
+            codigo_ativacao = f"{random.randint(100000, 999999)}"
+            
+            try:
+                # Atualizar a password do utente para o novo PIN
+                utente.password_hash = obter_hash_palavra_passe(pin_temporario)
+                utente.primeiro_acesso = True
+                sessao.add(utente)
+                
+                # Criar novo registro de validação
+                validacao = EmailValidation(
+                    email=utente.email, 
+                    codigo=codigo_ativacao, 
+                    expira_em=datetime.now() + timedelta(hours=24)
+                )
+                sessao.add(validacao)
+                sessao.commit()
+                
+                # Enviar e-mail
+                background_tasks.add_task(enviar_email_ativacao, utente.email, utente.nome, f"{codigo_ativacao} (PIN Mobile: {pin_temporario})")
+                
+                print(f"\n📧 [DEBUG RECUPERAÇÃO UTENTE] Utente {utente.num_utente} | Novo PIN: {pin_temporario} | Novo Código: {codigo_ativacao}\n")
+                
+                return {"success": True, "message": "Se o número de utente for válido, receberá um novo PIN no seu e-mail."}
+            except Exception as e:
+                sessao.rollback()
+                raise HTTPException(status_code=500, detail=f"Erro ao processar pedido: {str(e)}")
+        
+        # Retornamos sempre sucesso por segurança
+        return {"success": True, "message": "Se o número de utente for válido, receberá os dados por e-mail."}
+
+    # 2. Recuperação por e-mail (Portal Staff ou Utentes se enviaram e-mail)
+    if not dados.email:
+        # Se chegamos aqui sem e-mail e sem num_utente, erro de validação (FastAPI trata 422 se os campos forem obrigatórios, 
+        # mas como são opcionais, verificamos aqui)
+        raise HTTPException(status_code=422, detail="Deve fornecer o e-mail ou o número de utente.")
+
     email_limpo = dados.email.lower().strip()
-    utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == email_limpo)).first()
     
+    # Tentar Utilizador (Staff)
+    utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == email_limpo)).first()
     if utilizador:
         token = str(uuid.uuid4())
         reset = PasswordReset(
@@ -230,7 +308,23 @@ async def recuperar_password(dados: RecuperarConta, background_tasks: Background
         link = f"http://localhost:3000/reset-password?token={token}"
         background_tasks.add_task(enviar_email_recuperacao_password, email_limpo, utilizador.nome_completo, link)
         
-    return {"message": "Se o e-mail existir no nosso sistema, receberá um link de recuperação em breve."}
+    # Tentar Utente (Mobile) - Também suportamos recuperação por e-mail para utentes
+    utente = sessao.exec(select(Utente).where(Utente.email == email_limpo)).first()
+    if utente:
+        pin_temporario = ''.join(random.choices(string.digits, k=6))
+        codigo_ativacao = f"{random.randint(100000, 999999)}"
+        try:
+            utente.password_hash = obter_hash_palavra_passe(pin_temporario)
+            utente.primeiro_acesso = True
+            sessao.add(utente)
+            validacao = EmailValidation(email=email_limpo, codigo=codigo_ativacao, expira_em=datetime.now() + timedelta(hours=24))
+            sessao.add(validacao)
+            sessao.commit()
+            background_tasks.add_task(enviar_email_ativacao, email_limpo, utente.nome, f"{codigo_ativacao} (PIN Mobile: {pin_temporario})")
+        except Exception:
+            sessao.rollback()
+
+    return {"message": "Se o e-mail existir no nosso sistema, receberá os dados de recuperação em breve."}
 
 @router.post("/reset-password")
 def confirmar_redefinicao_password(dados: RedefinirPassword, sessao: Session = Depends(obter_sessao)):
@@ -449,9 +543,7 @@ async def reenviar_ativacao_utilizador(id_utilizador: int, background_tasks: Bac
     if not utilizador:
         raise HTTPException(status_code=404, detail="Utilizador não encontrado")
     
-    if utilizador.ativo:
-        raise HTTPException(status_code=400, detail="Este utilizador já tem a conta ativa.")
-
+    # Removida a restrição de conta ativa para permitir recuperação de dados
     codigo = f"{random.randint(100000, 999999)}"
     
     try:
@@ -465,11 +557,11 @@ async def reenviar_ativacao_utilizador(id_utilizador: int, background_tasks: Bac
         
         background_tasks.add_task(enviar_email_ativacao, utilizador.email, utilizador.nome_completo, codigo)
         
-        log_audit(sessao, admin.id_utilizador, "RESEND_ACTIVATION", "utilizador", str(id_utilizador), f"Novo código de ativação enviado para {utilizador.email}")
+        log_audit(sessao, admin.id_utilizador, "RESEND_DATA", "utilizador", str(id_utilizador), f"Novo código de ativação/recuperação enviado para {utilizador.email}")
         
-        print(f"\n📧 [DEBUG REENVIO] Utilizador {utilizador.id_utilizador} | Novo Código: {codigo}\n")
+        print(f"\n📧 [DEBUG REENVIO STAFF] Utilizador {utilizador.id_utilizador} | Novo Código: {codigo}\n")
         
-        return {"message": "Novo código de ativação enviado com sucesso."}
+        return {"message": "Dados de acesso enviados com sucesso por e-mail."}
     except Exception as e:
         sessao.rollback()
         raise HTTPException(status_code=500, detail=f"Erro ao processar reenvio: {str(e)}")
@@ -532,4 +624,25 @@ def obter_profissional(num_func: int, sessao: Session = Depends(obter_sessao)):
 
 @router.get("/audit", response_model=List[LerAuditLog], dependencies=[Depends(admin_only)])
 def listar_audit_logs(sessao: Session = Depends(obter_sessao)):
-    return sessao.exec(select(AuditLog).order_by(AuditLog.data_hora.desc()).limit(100)).all()
+    logs = sessao.exec(select(AuditLog).order_by(AuditLog.data_hora.desc()).limit(100)).all()
+    resultado = []
+    for l in logs:
+        log_data = LerAuditLog.model_validate(l)
+        
+        # Nome de quem fez a ação (Staff)
+        if l.id_utilizador:
+            u = sessao.get(Utilizador, l.id_utilizador)
+            if u:
+                log_data.nome_utilizador = u.nome_completo
+        
+        # Identificação do recurso (se for utente)
+        if l.recurso == "utente" and l.id_recurso:
+            try:
+                ut = sessao.get(Utente, int(l.id_recurso))
+                if ut:
+                    log_data.nome_recurso = f"{ut.nome} (NIF: {ut.num_utente})"
+            except:
+                pass
+        
+        resultado.append(log_data)
+    return resultado

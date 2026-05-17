@@ -23,10 +23,16 @@ const ProtectedRoute = ({ children }) => {
 
   // Se for profissional de saúde e não selecionou hospital, forçar seleção
   const isStaff = ['RECECIONISTA', 'MEDICO', 'ENFERMEIRO'].includes(utilizador.role);
+  const isUtente = utilizador.role === 'UTENTE';
   const location = window.location.pathname;
 
   if (isStaff && !hospital && location !== '/select-hospital') {
     return <Navigate to="/select-hospital" />;
+  }
+
+  // Utente não pode ir para seleção de hospital
+  if (isUtente && location === '/select-hospital') {
+    return <Navigate to="/dashboard" />;
   }
   
   return <Layout>{children}</Layout>;
