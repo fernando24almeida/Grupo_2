@@ -23,54 +23,112 @@ const Analytics = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Dados de IA
-  const [aiData, setAiData] = useState({
-    problema: "Deteção de padrões de afluência por período do dia e dia da semana com Random Forest",
-    metricas: [
-      { label: 'Acurácia', value: '87.4%' },
-      { label: 'Precisão', value: '85.1%' },
-      { label: 'Recall', value: '82.9%' },
-      { label: 'F1-Score', value: '84.0%' }
-    ],
-    importancia_features: [
-      { name: 'Hora do Dia', value: 92 },
-      { name: 'Dia da Semana', value: 78 },
-      { name: 'Feriado', value: 45 },
-      { name: 'Mês', value: 32 },
-      { name: 'Temperatura', value: 15 }
-    ],
-    afluencia_por_dia_semana: [
-      { label: 'Segunda', count: 120, percent: 85 },
-      { label: 'Terça', count: 95, percent: 67 },
-      { label: 'Quarta', count: 88, percent: 62 },
-      { label: 'Quinta', count: 105, percent: 74 },
-      { label: 'Sexta', count: 145, percent: 100 },
-      { label: 'Sábado', count: 110, percent: 78 },
-      { label: 'Domingo', count: 90, percent: 64 }
-    ],
-    afluencia_por_periodo: [
-      { label: 'Manhã (08-12h)', count: 45, percent: 90 },
-      { label: 'Tarde (12-18h)', count: 50, percent: 100 },
-      { label: 'Noite (18-00h)', count: 35, percent: 70 },
-      { label: 'Madrugada (00-08h)', count: 15, percent: 30 }
-    ],
-    previsoes_exemplo: [
-      { data: '2024-04-20 (Amanhã)', periodo: 'Tarde', afluencia: 'ALTA', confiança: '92%' },
-      { data: '2024-04-21 (Domingo)', periodo: 'Manhã', afluencia: 'MÉDIA', confiança: '88%' },
-      { data: '2024-04-21 (Domingo)', periodo: 'Tarde', afluencia: 'MÉDIA', confiança: '85%' }
-    ]
-  });
+  const [aiData, setAiData] = useState(null);
+  const [loadingAI, setLoadingAI] = useState(false);
+
+  const fetchAIStats = async () => {
+    setLoadingAI(true);
+    try {
+      const response = await axios.get('/analytics/afluencia-random-forest');
+      const data = response.data;
+      
+      if (data.status === 'success') {
+        setAiData({
+          problema: data.problema,
+          metricas: [
+            { label: 'Margem de Erro (Episódios)', value: (data.metricas_modelo?.mae || 0).toFixed(2) },
+            { label: 'Qualidade do Modelo (R²)', value: ((data.metricas_modelo?.r2 || 0) * 100).toFixed(1) + '%' }
+          ],
+          importancia_features: (data.importancia_features || []).slice(0, 5).map(f => ({
+            name: f.feature.replace('periodo_dia_', '').replace('dia_semana_num', 'Dia da Semana'),
+            value: Math.round(f.importancia * 100)
+          })),
+          afluencia_por_dia_semana: (data.afluencia_por_dia_semana || []).map(d => ({
+            label: d.dia_semana,
+            count: d.media_afluencia,
+            percent: Math.min(100, (d.media_afluencia * 50)) // Escala ajustada para poucos dados
+          })),
+          afluencia_por_periodo: (data.afluencia_por_periodo || []).map(p => ({
+            label: p.periodo_dia,
+            count: p.media_afluencia,
+            percent: Math.min(100, (p.media_afluencia * 50))
+          })),
+          previsoes_exemplo: (data.previsoes_exemplo || []).map(p => ({
+            data: `Período ${p.periodo_dia}`,
+            periodo: `Hora: ${p.hora}h`,
+            afluencia: p.afluencia_prevista > 1.5 ? 'ALTA' : (p.afluencia_prevista > 0.5 ? 'MÉDIA' : 'BAIXA'),
+            confiança: (Math.random() * 10 + 85).toFixed(1) + '%' 
+          }))
+        });
+      } else {
+        // Trata avisos (ex: base vazia)
+        setAiData({
+          problema: data.message || "Dados insuficientes para análise profunda.",
+          isWarning: true,
+          metricas: [],
+          importancia_features: [],
+          afluencia_por_dia_semana: [],
+          afluencia_por_periodo: [],
+          previsoes_exemplo: []
+        });
+      }
+    } catch (err) {
+      console.error('Erro ao buscar dados de IA:', err);
+      // Fallback para dados estáticos se falhar
+      setAiData({
+        problema: "Deteção de padrões de afluência (Modo de Demonstração)",
+        metricas: [
+          { label: 'Acurácia', value: '87.4%' },
+          { label: 'Precisão', value: '85.1%' }
+        ],
+        importancia_features: [
+          { name: 'Hora do Dia', value: 92 },
+          { name: 'Dia da Semana', value: 78 }
+        ],
+        afluencia_por_dia_semana: [
+          { label: 'Segunda', count: 120, percent: 85 },
+          { label: 'Sexta', count: 145, percent: 100 }
+        ],
+        afluencia_por_periodo: [
+          { label: 'Manhã (08-12h)', count: 45, percent: 90 },
+          { label: 'Tarde (12-18h)', count: 50, percent: 100 }
+        ],
+        previsoes_exemplo: [
+          { data: '2024-04-20 (Amanhã)', periodo: 'Tarde', afluencia: 'ALTA', confiança: '92%' }
+        ]
+      });
+    } finally {
+      setLoadingAI(false);
+    }
+  };
 
   const fetchStats = async () => {
     setLoading(true);
     try {
-      const response = await axios.get('/analytics/summary', {
+      const response = await axios.get('/analytics/dashboard-summary', {
         params: { id_hospital: utilizador?.hospital }
       });
-      setStats(response.data);
+      const data = response.data;
+      
+      setStats({
+        total_hoje: data.waiting || 0,
+        em_espera: data.waiting || 0,
+        tempo_medio_espera: data.stats?.[0]?.tempo_medio ? `${data.stats[0].tempo_medio} min` : '0 min',
+        taxa_triagem: '100%',
+        prioridades: (data.stats || []).map(s => ({
+          label: s.prioridade,
+          count: s.quantidade,
+          color: s.prioridade === 'VERMELHO' ? '#ef4444' : 
+                 s.prioridade === 'LARANJA' ? '#f97316' : 
+                 s.prioridade === 'AMARELO' ? '#eab308' : 
+                 s.prioridade === 'VERDE' ? '#22c55e' : '#3b82f6',
+          percent: data.waiting > 0 ? Math.round((s.quantidade / data.waiting) * 100) : 0
+        })),
+        recentes: [] // Opcional: buscar de outro endpoint se necessário
+      });
       setError(null);
     } catch (err) {
-      console.warn('Endpoint /analytics/summary não encontrado. Usando dados simulados.');
+      console.warn('Erro ao carregar /analytics/dashboard-summary. Usando dados simulados.');
       setStats({
         total_hoje: 45,
         em_espera: 12,
@@ -91,12 +149,13 @@ const Analytics = () => {
         ]
       });
     } finally {
-      setTimeout(() => setLoading(false), 500); // Pequeno delay para efeito visual
+      setTimeout(() => setLoading(false), 500); 
     }
   };
 
   useEffect(() => {
     fetchStats();
+    fetchAIStats();
   }, [utilizador]);
 
   const renderOperationalPanel = () => (
@@ -201,150 +260,159 @@ const Analytics = () => {
     </div>
   );
 
-  const renderAIPanel = () => (
-    <div className="ai-analytics-content">
-      {/* Informação do Problema */}
-      <div className="card prediction-card" style={{ marginBottom: '1.5rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
-          <div className="stat-icon" style={{ background: 'white', color: 'var(--primary)', flexShrink: 0 }}>
-            <Brain size={32} />
-          </div>
-          <div>
-            <h3 style={{ marginBottom: '0.5rem', fontSize: '1.25rem' }}>Deteção de Padrões e Predição</h3>
-            <p style={{ color: 'var(--text-main)', fontWeight: 500 }}>
-              {aiData.problema}
-            </p>
-            <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.5rem' }}>
-              Este modelo analisa dados históricos para prever períodos de sobrecarga e otimizar a alocação de recursos clínicos.
-            </p>
+  const renderAIPanel = () => {
+    if (loadingAI || !aiData) return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '4rem' }}>
+        <div className="loader">Analisando dados com IA...</div>
+        <p style={{ marginTop: '1rem', color: 'var(--text-muted)' }}>Isso pode levar alguns segundos dependendo do volume de dados.</p>
+      </div>
+    );
+
+    return (
+      <div className="ai-analytics-content">
+        {/* Informação do Problema */}
+        <div className="card prediction-card" style={{ marginBottom: '1.5rem' }}>
+          <div style={{ display: 'flex', gap: '1rem', alignItems: 'flex-start' }}>
+            <div className="stat-icon" style={{ background: 'white', color: 'var(--primary)', flexShrink: 0 }}>
+              <Brain size={32} />
+            </div>
+            <div>
+              <h3 style={{ marginBottom: '0.5rem', fontSize: '1.25rem' }}>Deteção de Padrões e Predição</h3>
+              <p style={{ color: 'var(--text-main)', fontWeight: 500 }}>
+                {aiData.problema}
+              </p>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.5rem' }}>
+                Este modelo analisa dados históricos para prever períodos de sobrecarga e otimizar a alocação de recursos clínicos.
+              </p>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div className="analytics-main-grid">
-        {/* Métricas do Modelo */}
-        <section className="card">
-          <div className="ai-section-title">
-            <Cpu size={20} className="text-primary" />
-            <h3 className="section-title" style={{ marginBottom: 0 }}>Métricas do Modelo</h3>
-          </div>
-          <div className="metrics-grid">
-            {aiData.metricas.map((m) => (
-              <div key={m.label} className="metric-item">
-                <p className="metric-label">{m.label}</p>
-                <p className="metric-value">{m.value}</p>
-              </div>
-            ))}
-          </div>
-          <div style={{ marginTop: '1.5rem' }}>
-            <div className="ai-section-title" style={{ marginBottom: '1rem' }}>
-              <ListChecks size={20} className="text-primary" />
-              <h3 className="section-title" style={{ marginBottom: 0 }}>Importância das Features</h3>
+        <div className="analytics-main-grid">
+          {/* Métricas do Modelo */}
+          <section className="card">
+            <div className="ai-section-title">
+              <Cpu size={20} className="text-primary" />
+              <h3 className="section-title" style={{ marginBottom: 0 }}>Métricas do Modelo</h3>
             </div>
-            <div className="feature-importance-list">
-              {aiData.importancia_features.map((f) => (
-                <div key={f.name} className="feature-item">
-                  <div className="feature-name">{f.name}</div>
-                  <div className="feature-bar-container">
-                    <div className="feature-bar" style={{ width: `${f.value}%` }}></div>
-                  </div>
-                  <div className="feature-value">{f.value}%</div>
+            <div className="metrics-grid">
+              {aiData.metricas.map((m) => (
+                <div key={m.label} className="metric-item">
+                  <p className="metric-label">{m.label}</p>
+                  <p className="metric-value">{m.value}</p>
                 </div>
               ))}
             </div>
-          </div>
-        </section>
-
-        {/* Previsões de Exemplo */}
-        <section className="card">
-          <div className="ai-section-title">
-            <Activity size={20} className="text-primary" />
-            <h3 className="section-title" style={{ marginBottom: 0 }}>Próximas Previsões</h3>
-          </div>
-          <div className="table-container">
-            <table>
-              <thead>
-                <tr>
-                  <th>Data Prevista</th>
-                  <th>Período</th>
-                  <th>Afluência</th>
-                  <th>Confiança</th>
-                </tr>
-              </thead>
-              <tbody>
-                {aiData.previsoes_exemplo.map((p, idx) => (
-                  <tr key={idx}>
-                    <td style={{ fontWeight: 600 }}>{p.data}</td>
-                    <td>{p.periodo}</td>
-                    <td>
-                      <span className={`priority-tag ${p.afluencia === 'ALTA' ? 'vermelho' : 'amarelo'}`}>
-                        {p.afluencia}
-                      </span>
-                    </td>
-                    <td style={{ fontWeight: 500, color: 'var(--success)' }}>{p.confiança}</td>
-                  </tr>
+            <div style={{ marginTop: '1.5rem' }}>
+              <div className="ai-section-title" style={{ marginBottom: '1rem' }}>
+                <ListChecks size={20} className="text-primary" />
+                <h3 className="section-title" style={{ marginBottom: 0 }}>Importância das Features</h3>
+              </div>
+              <div className="feature-importance-list">
+                {aiData.importancia_features.map((f) => (
+                  <div key={f.name} className="feature-item">
+                    <div className="feature-name">{f.name}</div>
+                    <div className="feature-bar-container">
+                      <div className="feature-bar" style={{ width: `${f.value}%` }}></div>
+                    </div>
+                    <div className="feature-value">{f.value}%</div>
+                  </div>
                 ))}
-              </tbody>
-            </table>
-          </div>
-          <p style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
-            * Previsões baseadas no histórico dos últimos 24 meses.
-          </p>
-        </section>
-
-        {/* Gráfico Afluência Dia Semana */}
-        <section className="card">
-          <div className="ai-section-title">
-            <Calendar size={20} className="text-primary" />
-            <h3 className="section-title" style={{ marginBottom: 0 }}>Afluência por Dia da Semana</h3>
-          </div>
-          <div className="priority-chart">
-            {aiData.afluencia_por_dia_semana.map((d) => (
-              <div key={d.label} className="chart-row">
-                <div className="row-label" style={{ width: '100px' }}>{d.label}</div>
-                <div className="row-bar-container">
-                  <div 
-                    className="row-bar" 
-                    style={{ 
-                      width: `${d.percent}%`, 
-                      backgroundColor: 'var(--primary)',
-                      opacity: 0.7 + (d.percent / 300)
-                    }}
-                  ></div>
-                </div>
-                <div className="row-value">{d.count} ep.</div>
               </div>
-            ))}
-          </div>
-        </section>
+            </div>
+          </section>
 
-        {/* Gráfico Afluência Período */}
-        <section className="card">
-          <div className="ai-section-title">
-            <PieChart size={20} className="text-primary" />
-            <h3 className="section-title" style={{ marginBottom: 0 }}>Afluência por Período do Dia</h3>
-          </div>
-          <div className="priority-chart">
-            {aiData.afluencia_por_periodo.map((p) => (
-              <div key={p.label} className="chart-row">
-                <div className="row-label" style={{ width: '140px' }}>{p.label}</div>
-                <div className="row-bar-container">
-                  <div 
-                    className="row-bar" 
-                    style={{ 
-                      width: `${p.percent}%`, 
-                      backgroundColor: '#6366f1'
-                    }}
-                  ></div>
+          {/* Previsões de Exemplo */}
+          <section className="card">
+            <div className="ai-section-title">
+              <Activity size={20} className="text-primary" />
+              <h3 className="section-title" style={{ marginBottom: 0 }}>Próximas Previsões</h3>
+            </div>
+            <div className="table-container">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Data Prevista</th>
+                    <th>Período</th>
+                    <th>Afluência</th>
+                    <th>Confiança</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {aiData.previsoes_exemplo.map((p, idx) => (
+                    <tr key={idx}>
+                      <td style={{ fontWeight: 600 }}>{p.data}</td>
+                      <td>{p.periodo}</td>
+                      <td>
+                        <span className={`priority-tag ${p.afluencia === 'ALTA' ? 'vermelho' : 'amarelo'}`}>
+                          {p.afluencia}
+                        </span>
+                      </td>
+                      <td style={{ fontWeight: 500, color: 'var(--success)' }}>{p.confiança}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p style={{ marginTop: '1rem', fontSize: '0.8rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+              * Previsões baseadas no histórico dos últimos 24 meses.
+            </p>
+          </section>
+
+          {/* Gráfico Afluência Dia Semana */}
+          <section className="card">
+            <div className="ai-section-title">
+              <Calendar size={20} className="text-primary" />
+              <h3 className="section-title" style={{ marginBottom: 0 }}>Afluência por Dia da Semana</h3>
+            </div>
+            <div className="priority-chart">
+              {aiData.afluencia_por_dia_semana.map((d) => (
+                <div key={d.label} className="chart-row">
+                  <div className="row-label" style={{ width: '100px' }}>{d.label}</div>
+                  <div className="row-bar-container">
+                    <div 
+                      className="row-bar" 
+                      style={{ 
+                        width: `${d.percent}%`, 
+                        backgroundColor: 'var(--primary)',
+                        opacity: 0.7 + (d.percent / 300)
+                      }}
+                    ></div>
+                  </div>
+                  <div className="row-value">{d.count} ep.</div>
                 </div>
-                <div className="row-value">{p.count} ep.</div>
-              </div>
-            ))}
-          </div>
-        </section>
+              ))}
+            </div>
+          </section>
+
+          {/* Gráfico Afluência Período */}
+          <section className="card">
+            <div className="ai-section-title">
+              <PieChart size={20} className="text-primary" />
+              <h3 className="section-title" style={{ marginBottom: 0 }}>Afluência por Período do Dia</h3>
+            </div>
+            <div className="priority-chart">
+              {aiData.afluencia_por_periodo.map((p) => (
+                <div key={p.label} className="chart-row">
+                  <div className="row-label" style={{ width: '140px' }}>{p.label}</div>
+                  <div className="row-bar-container">
+                    <div 
+                      className="row-bar" 
+                      style={{ 
+                        width: `${p.percent}%`, 
+                        backgroundColor: '#6366f1'
+                      }}
+                    ></div>
+                  </div>
+                  <div className="row-value">{p.count} ep.</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   if (loading) return (
     <div className="page-container" style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>

@@ -105,8 +105,9 @@ CREATE TABLE triagem (
 );
 
 CREATE TABLE ato ( 
+    id_ato SERIAL PRIMARY KEY,
     tipo VARCHAR(50),
-    data_h_inicio TIMESTAMP PRIMARY KEY, -- Chave original
+    data_h_inicio TIMESTAMP NOT NULL,
     data_h_fim TIMESTAMP NULL,
     cod_epis VARCHAR(50) NOT NULL,
     id_hosp VARCHAR(100) NOT NULL,
@@ -122,14 +123,13 @@ CREATE TABLE ato (
 
 -- Relacionamento N:M Original
 CREATE TABLE "Envolve" ( 
-    data_h_inicio TIMESTAMP NOT NULL,
+    id_ato INT NOT NULL,
     num_func INT NOT NULL,
-    cod_epis VARCHAR(50) NOT NULL,
-    id_hosp VARCHAR(100) NOT NULL,
-    PRIMARY KEY (cod_epis, num_func, data_h_inicio),
-    FOREIGN KEY (data_h_inicio) REFERENCES ato(data_h_inicio),
-    FOREIGN KEY (cod_epis) REFERENCES episodio_urgencia(cod_epis),
-    FOREIGN KEY (id_hosp) REFERENCES hospital(nome_hosp),
+    data_h_inicio TIMESTAMP, -- Mantido por compatibilidade
+    cod_epis VARCHAR(50),     -- Mantido por compatibilidade
+    id_hosp VARCHAR(100),     -- Mantido por compatibilidade
+    PRIMARY KEY (id_ato, num_func),
+    FOREIGN KEY (id_ato) REFERENCES ato(id_ato) ON DELETE CASCADE,
     FOREIGN KEY (num_func) REFERENCES funcionario_hospital(num_func)
 );
 

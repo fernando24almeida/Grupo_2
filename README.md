@@ -24,6 +24,7 @@ Modular system for clinical management, including emergency episodes, triage, in
 4. Install dependencies: `pip install -r requirements.txt`.
 5. Run the server: `uvicorn app.main:app --reload`.
 
+
 ### 3. Frontend
 1. Navigate to `frontend/`.
 2. Install dependencies: `npm install`.

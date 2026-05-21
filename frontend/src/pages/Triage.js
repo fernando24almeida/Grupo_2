@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { usarAutenticacao } from '../services/AuthContext';
-import { ClipboardList, User, Clock, AlertCircle, CheckCircle, ArrowRight, History } from 'lucide-react';
+import { ClipboardList, User, Clock, AlertCircle, CheckCircle, ArrowRight, History, Search } from 'lucide-react';
 
 const Triage = () => {
   const { utilizador } = usarAutenticacao();
@@ -11,6 +11,7 @@ const Triage = () => {
   const [hospitals, setHospitals] = useState([]);
   const [selectedHospital, setSelectedHospital] = useState(utilizador?.hospital || '');
   const [selectedEpisode, setSelectedEpisode] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('triage');
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -108,7 +109,7 @@ const Triage = () => {
     try {
       await axios.post('/clinical/triagens/manchester', {
         ...formData,
-        num_func_enfermeiro: utilizador?.num_func || 1001
+        num_func_enfermeiro: utilizador?.num_func
       });
       setMessage({ type: 'success', text: `Triagem do episódio ${formData.cod_epis} concluída com prioridade ${formData.prioridade}!` });
       setSelectedEpisode(null);
@@ -119,7 +120,7 @@ const Triage = () => {
         temperatura: 36.5,
         sintomas: '',
         observacoes: '',
-        num_func_enfermeiro: utilizador?.num_func || 1001
+        num_func_enfermeiro: utilizador?.num_func
       });
       fetchAwaitingEpisodes();
     } catch (error) {
@@ -170,6 +171,15 @@ const Triage = () => {
               <h3 className="h5 mb-0"><Clock size={18} /> Fila de Espera</h3>
               <span className="badge bg-primary rounded-pill">{episodes.length}</span>
             </div>
+            <div className="search-box-sidebar">
+              <Search size={16} />
+              <input 
+                type="text" 
+                placeholder="Pesquisar código..." 
+                value={searchQuery} 
+                onChange={(e) => setSearchQuery(e.target.value)} 
+              />
+            </div>
             <div className="queue-list">
               {episodes.length === 0 ? (
                 <div className="empty-state">
@@ -177,7 +187,9 @@ const Triage = () => {
                   <p>Fila vazia</p>
                 </div>
               ) : (
-                episodes.map((ep, index) => (
+                episodes.filter(ep => 
+                  ep.cod_epis.toLowerCase().includes(searchQuery.toLowerCase())
+                ).map((ep, index) => (
                   <div 
                     key={ep.cod_epis} 
                     className={`queue-item ${selectedEpisode?.cod_epis === ep.cod_epis ? 'active' : ''}`}
@@ -285,41 +297,56 @@ const Triage = () => {
                 <div className="history-view animate-fade-in">
                   {history.length === 0 ? <p className="text-center p-5 bg-white border rounded">Sem episódios anteriores registados.</p> : (
                     <div className="timeline-container">
-                      {history.map((item, i) => (
-                        <div key={i} className="card mb-3 shadow-sm">
-                          <div className="card-header bg-light d-flex justify-content-between align-items-center py-2">
-                            <strong>Episódio: {item.episodio.cod_epis}</strong>
-                            <small className="badge bg-secondary">{new Date(item.episodio.data_h_entrada).toLocaleDateString()}</small>
-                          </div>
-                          <div className="card-body py-2">
-                            <div className="mb-2">
-                              <span className="badge bg-info text-dark me-2">Triagem</span>
-                              <strong>Prioridade:</strong> <span className={`priority-text-${item.triagem?.prioridade?.toLowerCase()}`}>{item.triagem?.prioridade}</span> | 
-                              <strong> Profissional:</strong> {item.triagem?.enfermeiro_nome} ({item.triagem?.enfermeiro_username} - ID: {item.triagem?.num_func_enfermeiro})
-                            </div>
-                            <p className="mb-2 small"><strong>Queixa:</strong> {item.triagem?.sintomas}</p>
-                            
-                            {item.atos && item.atos.length > 0 && (
-                              <div className="atos-list border-top pt-2">
-                                {item.atos.map((ato, idx) => (
-                                  <div key={idx} className="small mb-1">
-                                    <span className="badge bg-primary me-1">Ato</span>
-                                    <strong>{ato.tipo}:</strong> {ato.diagnostico || '---'} | 
-                                    <small className="text-muted"> {ato.profissional_nome} ({ato.profissional_username} - ID: {ato.num_func})</small>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
+                      {history.map((item, i) => {
+                        const events = [
+                          { type: 'triagem', date: new Date(item.triagem?.data_h_triagem), data: item.triagem },
+                          ...(item.atos || []).map(a => ({ type: 'ato', date: new Date(a.data_h_inicio), data: a })),
+                          ...(item.prescricoes || []).map(p => ({ type: 'presc', date: new Date(p.data_h_presc), data: p }))
+                        ]
+                        .filter(e => e.date && !isNaN(e.date.getTime()))
+                        .sort((a, b) => a.date - b.date);
 
-                            {item.internamento && (
-                              <div className="mt-2 small border-top pt-2">
-                                <span className="badge bg-danger me-1">Internamento</span>
-                                <strong>Médico Responsável:</strong> {item.internamento.medico_nome} ({item.internamento.medico_username} - ID: {item.internamento.num_func_medico})
-                              </div>
-                            )}
+                        return (
+                          <div key={i} className="card mb-3 shadow-sm">
+                            <div className="card-header bg-light d-flex justify-content-between align-items-center py-2">
+                              <strong>Episódio: {item.episodio.cod_epis}</strong>
+                              <small className="badge bg-secondary">{new Date(item.episodio.data_h_entrada).toLocaleDateString()}</small>
+                            </div>
+                            <div className="card-body py-2">
+                              {events.map((ev, idx) => (
+                                <div key={idx} className="mb-3 history-step-item">
+                                  <div className="d-flex align-items-center gap-2 mb-1">
+                                    <span className={`badge bg-${ev.type === 'triagem' ? 'info' : ev.type === 'ato' ? 'primary' : 'warning'} text-dark`}>
+                                      {ev.type.toUpperCase()} {ev.type === 'ato' ? `(${ev.data.tipo})` : ''}
+                                    </span>
+                                    <small className="text-muted fw-bold">{ev.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                                  </div>
+                                  
+                                  {ev.type === 'triagem' && (
+                                    <p className="mb-0 small"><strong>Queixa:</strong> {ev.data.sintomas} | <strong>Enfermeiro/a:</strong> {ev.data.profissional_info?.nome}</p>
+                                  )}
+                                  {ev.type === 'ato' && (
+                                    <p className="mb-0 small"><strong>Diag:</strong> {ev.data.diagnostico || '---'} | <strong>Prof:</strong> {ev.data.profissional_nome}</p>
+                                  )}
+                                  {ev.type === 'presc' && (
+                                    <p className="mb-0 small"><strong>Med:</strong> {ev.data.medicamento} ({ev.data.dosagem}) | <strong>Prof:</strong> {ev.data.medico_nome}</p>
+                                  )}
+                                </div>
+                              ))}
+
+                              {item.internamento && (
+                                <div className="mt-2 pt-2 border-top">
+                                  <div className="d-flex align-items-center gap-2 mb-1">
+                                    <span className="badge bg-danger">INTERNAMENTO</span>
+                                    <small className="text-muted fw-bold">{new Date(item.internamento.data_h_entrada).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</small>
+                                  </div>
+                                  <p className="mb-0 small"><strong>Médico Responsável:</strong> {item.internamento.medico_nome}</p>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -339,6 +366,10 @@ const Triage = () => {
         .triage-page { padding: 2rem; background: #f0f2f5; min-height: 100vh; }
         .triage-container { display: grid; grid-template-columns: 320px 1fr; gap: 2rem; }
         
+        .search-box-sidebar { padding: 10px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 8px; }
+        .search-box-sidebar input { border: none; background: none; outline: none; font-size: 0.85rem; width: 100%; color: #475569; }
+        .search-box-sidebar svg { color: #94a3b8; }
+
         .queue-list { max-height: calc(100vh - 250px); overflow-y: auto; }
         .queue-item { 
           display: flex; justify-content: space-between; align-items: center;

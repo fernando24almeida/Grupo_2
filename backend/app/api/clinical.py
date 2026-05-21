@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Request
-from sqlmodel import Session, select, func, union_all
+from sqlmodel import Session, select, func, union_all, or_
 from pydantic import BaseModel
 from typing import List, Optional
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, timezone, date
 import random
 import string
 
@@ -104,12 +104,22 @@ def atualizar_episodio_auditado(
     sessao.refresh(db_episodio)
     return db_episodio
 
-@router.get("/triagens", response_model=List[Triagem], dependencies=[Depends(admin_only)])
+@router.get("/triagens", dependencies=[Depends(admin_only)])
 def listar_triagens(id_hospital: Optional[str] = None, sessao: Session = Depends(obter_sessao)):
+    query = select(Triagem, Utilizador).join(
+        Utilizador, or_(Triagem.num_func_enfermeiro == Utilizador.num_func, Triagem.num_func_enfermeiro == Utilizador.id_utilizador), isouter=True
+    )
     if id_hospital:
-        query = select(Triagem).join(EpisodioUrgencia, Triagem.cod_epis == EpisodioUrgencia.cod_epis).where(EpisodioUrgencia.id_hospital == id_hospital)
-        return sessao.exec(query).all()
-    return sessao.exec(select(Triagem)).all()
+        query = query.join(EpisodioUrgencia, Triagem.cod_epis == EpisodioUrgencia.cod_epis).where(EpisodioUrgencia.id_hospital == id_hospital)
+    
+    resultados = sessao.exec(query).all()
+    final = []
+    for t, u in resultados:
+        t_dict = t.dict()
+        t_dict["enfermeiro_nome"] = u.nome_completo if u else f"Enf. {t.num_func_enfermeiro}"
+        t_dict["enfermeiro_username"] = u.nome_utilizador if u else "---"
+        final.append(t_dict)
+    return final
 
 @router.patch("/triagens/{num_triagem}/audit", response_model=Triagem, dependencies=[Depends(admin_only)])
 def atualizar_triagem_auditada(
@@ -138,26 +148,37 @@ def atualizar_triagem_auditada(
     sessao.refresh(db_triagem)
     return db_triagem
 
-@router.get("/atos", response_model=List[Ato], dependencies=[Depends(admin_only)])
+@router.get("/atos", dependencies=[Depends(admin_only)])
 def listar_atos(id_hospital: Optional[str] = None, sessao: Session = Depends(obter_sessao)):
+    query = select(Ato, Utilizador).join(
+        Utilizador, or_(Ato.num_func == Utilizador.num_func, Ato.num_func == Utilizador.id_utilizador), isouter=True
+    )
     if id_hospital:
-        return sessao.exec(select(Ato).where(Ato.id_hosp == id_hospital)).all()
-    return sessao.exec(select(Ato)).all()
+        query = query.where(Ato.id_hosp == id_hospital)
+        
+    resultados = sessao.exec(query).all()
+    final = []
+    for a, u in resultados:
+        a_dict = a.dict()
+        a_dict["profissional_nome"] = u.nome_completo if u else f"Prof. {a.num_func}"
+        a_dict["profissional_username"] = u.nome_utilizador if u else "---"
+        final.append(a_dict)
+    return final
 
-@router.patch("/atos/{data_h_inicio}/audit", response_model=Ato, dependencies=[Depends(admin_only)])
+@router.patch("/atos/{id_ato}/audit", response_model=Ato, dependencies=[Depends(admin_only)])
 def atualizar_ato_auditado(
-    data_h_inicio: datetime, 
+    id_ato: int, 
     dados: AtualizarAtoAuditado, 
     request: Request,
     sessao: Session = Depends(obter_sessao),
     admin: Utilizador = Depends(obter_utilizador_atual)
 ):
-    db_ato = sessao.get(Ato, data_h_inicio)
+    db_ato = sessao.get(Ato, id_ato)
     if not db_ato:
         raise HTTPException(status_code=404, detail="Ato clínico não encontrado")
     
     detalhes = f"Justificativa: {dados.justificativa} | Autorização: {dados.autorizacao}"
-    log_audit(sessao, admin.id_utilizador, "UPDATE_AUDITED", "ato", str(data_h_inicio), detalhes, request)
+    log_audit(sessao, admin.id_utilizador, "UPDATE_AUDITED", "ato", str(id_ato), detalhes, request)
     
     update_data = dados.dict(exclude_unset=True)
     del update_data["justificativa"]
@@ -209,6 +230,16 @@ def eliminar_hospital(nome_hosp: str, sessao: Session = Depends(obter_sessao)):
     db_hospital = sessao.get(Hospital, nome_hosp)
     if not db_hospital:
         raise HTTPException(status_code=404, detail="Hospital não encontrado")
+    
+    # VERIFICAÇÃO DE USO
+    # 1. Verificar episódios vinculados a este hospital
+    if sessao.exec(select(EpisodioUrgencia).where(EpisodioUrgencia.id_hospital == nome_hosp)).first():
+        raise HTTPException(status_code=400, detail=f"Não é possível eliminar o hospital '{nome_hosp}' porque existem episódios de urgência registados nesta unidade. O histórico deve ser preservado para fins de auditoria.")
+
+    # 2. Verificar serviços vinculados
+    if sessao.exec(select(ServicoHospitalar).where(ServicoHospitalar.id_hosp == nome_hosp)).first():
+        raise HTTPException(status_code=400, detail="Este hospital possui serviços configurados e ativos. Remova os serviços antes de tentar eliminar a unidade, se aplicável.")
+
     sessao.delete(db_hospital)
     sessao.commit()
     return {"message": "Hospital eliminado com sucesso"}
@@ -218,20 +249,26 @@ def eliminar_hospital(nome_hosp: str, sessao: Session = Depends(obter_sessao)):
 def pesquisar_utente(
     num_utente: Optional[int] = None, 
     telemovel: Optional[str] = None, 
+    nome: Optional[str] = None,
     sessao: Session = Depends(obter_sessao)
 ):
     query = select(Utente)
     if num_utente:
         query = query.where(Utente.num_utente == num_utente)
     elif telemovel:
-        query = query.where(Utente.telemovel == telemovel)
+        # Pesquisa parcial por telemóvel
+        query = query.where(Utente.telemovel.like(f"%{telemovel}%"))
+    elif nome:
+        # Pesquisa parcial por nome (case-insensitive)
+        query = query.where(func.lower(Utente.nome).like(f"%{nome.lower()}%"))
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, 
-            detail="Deve fornecer um número de utente ou um número de telemóvel para a pesquisa."
+            detail="Deve fornecer um critério de pesquisa (NIF, Telemóvel ou Nome)."
         )
     
-    resultados = sessao.exec(query).all()
+    # Limitar resultados para performance
+    resultados = sessao.exec(query.limit(10)).all()
     return resultados
 
 # SCHEMAS ADICIONAIS
@@ -292,8 +329,8 @@ def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao:
         sessao.commit()
         sessao.refresh(papel_utente)
 
-    # 5. Gerar PIN temporário
-    pin_temporario = ''.join(random.choices(string.digits, k=6))
+    # 5. Gerar PIN único para Ativação e Primeiro Acesso (6 dígitos)
+    pin_unico = ''.join(random.choices(string.digits, k=6))
     
     # 6. Criar objeto Utente
     novo_utente = Utente(
@@ -305,30 +342,27 @@ def criar_utente(dados: UtenteCreate, background_tasks: BackgroundTasks, sessao:
         localidade=dados.localidade or None,
         sexo=dados.sexo or "M",
         data_nascimento=data_nasc,
-        password_hash=obter_hash_palavra_passe(pin_temporario),
+        password_hash=obter_hash_palavra_passe(pin_unico),
         ativo=False,
         primeiro_acesso=True,
         parentesco=dados.parentesco,
         id_role=papel_utente.id_role
     )
     
-    # 7. Gerar código de ativação
-    codigo_ativacao = f"{random.randint(100000, 999999)}"
-    
     try:
         sessao.add(novo_utente)
         validacao = EmailValidation(
             email=novo_utente.email, 
-            codigo=codigo_ativacao, 
-            expira_em=datetime.now() + timedelta(hours=24)
+            codigo=pin_unico, 
+            expira_em=datetime.now(timezone.utc) + timedelta(hours=24)
         )
         sessao.add(validacao)
         sessao.commit()
         
-        # 7. Enviar e-mail
-        background_tasks.add_task(enviar_email_ativacao, novo_utente.email, novo_utente.nome, f"{codigo_ativacao} (PIN Mobile: {pin_temporario})")
+        # 7. Enviar e-mail com o PIN único
+        background_tasks.add_task(enviar_email_ativacao, novo_utente.email, novo_utente.nome, pin_unico)
         
-        print(f"\n📧 [DEBUG MOBILE] Utente {novo_utente.num_utente} | PIN: {pin_temporario} | Código: {codigo_ativacao}\n")
+        print(f"\n📧 [DEBUG MOBILE] Utente {novo_utente.num_utente} | PIN Único: {pin_unico}\n")
         
         sessao.refresh(novo_utente)
         return novo_utente
@@ -389,8 +423,6 @@ async def reenviar_ativacao_utente(num_utente: int, background_tasks: Background
     if not utente.email:
         raise HTTPException(status_code=400, detail="Este utente não tem e-mail registado. Por favor, atualize os dados primeiro.")
     
-    # Removida restrição de conta ativa para permitir recuperação de PIN/Código
-
     # 1. Gerar novo PIN temporário
     pin_temporario = ''.join(random.choices(string.digits, k=6))
     
@@ -407,7 +439,7 @@ async def reenviar_ativacao_utente(num_utente: int, background_tasks: Background
         validacao = EmailValidation(
             email=utente.email, 
             codigo=codigo_ativacao, 
-            expira_em=datetime.now() + timedelta(hours=24)
+            expira_em=datetime.now(timezone.utc) + timedelta(hours=24)
         )
         sessao.add(validacao)
         sessao.commit()
@@ -468,6 +500,27 @@ def eliminar_utente(num_utente: int, sessao: Session = Depends(obter_sessao)):
     db_utente = sessao.get(Utente, num_utente)
     if not db_utente:
         raise HTTPException(status_code=404, detail="Utente não encontrado")
+    
+    # VERIFICAÇÃO DE USO
+    # 1. Verificar episódios vinculados
+    episodio_existente = sessao.exec(select(EpisodioUrgencia).where(EpisodioUrgencia.id_utente == num_utente)).first()
+    if episodio_existente:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível eliminar este utente porque já possui histórico de episódios de urgência no sistema. Para garantir a coerência e estabilidade da base de dados, o registo deve ser preservado."
+        )
+    
+    # 2. Verificar logs de auditoria (se houver)
+    log_existente = sessao.exec(select(AuditLog).where(AuditLog.recurso == "utente", AuditLog.id_recurso == str(num_utente))).first()
+    if log_existente:
+        raise HTTPException(
+            status_code=400,
+            detail="Este utente está interligado a registos de auditoria do sistema. A sua remoção comprometeria a integridade dos dados históricos."
+        )
+
+    # Limpar validações pendentes se houver
+    sessao.execute(text("DELETE FROM email_validation WHERE email = :email"), {"email": db_utente.email})
+
     sessao.delete(db_utente)
     sessao.commit()
     return {"message": "Utente eliminado com sucesso"}
@@ -524,7 +577,7 @@ def criar_episodio(dados_epis: CriarEpisodio, sessao: Session = Depends(obter_se
             detail=f"O utente {dados_epis.id_utente} já possui um episódio de urgência em aberto (Código: {episodio_ativo.cod_epis}). Deve dar alta ao episódio anterior antes de registar um novo."
         )
 
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     data_entrada = dados_epis.data_h_entrada or agora
     
     # Gerar código automático: EP + YYYY + MM + SEQUENCIAL (4 dígitos)
@@ -572,14 +625,16 @@ def obter_utilizador_opcional(request: Request):
     except:
         return None
 
-@router.get("/episodes", response_model=List[EpisodioUrgencia])
+@router.get("/episodes")
 def ler_episodios(
     id_hospital: Optional[str] = None, 
     em_aberto: Optional[bool] = None,
     sessao: Session = Depends(obter_sessao),
     utilizador = Depends(obter_utilizador_opcional)
 ):
-    query = select(EpisodioUrgencia)
+    query = select(EpisodioUrgencia, Utilizador).join(
+        Utilizador, EpisodioUrgencia.id_utilizador_rececao == Utilizador.id_utilizador, isouter=True
+    )
     
     # Se houver um utilizador logado, verificar o seu papel na BD
     if utilizador:
@@ -600,8 +655,19 @@ def ler_episodios(
     
     query = query.order_by(EpisodioUrgencia.data_h_entrada.desc())
     
-    episodios = sessao.exec(query).all()
-    return episodios
+    resultados = sessao.exec(query).all()
+    
+    final = []
+    for ep, user in resultados:
+        ep_dict = ep.dict()
+        ep_dict["profissional_info"] = {
+            "nome": user.nome_completo if user else "Utilizador Desconhecido",
+            "username": user.nome_utilizador if user else "---",
+            "num_func": user.num_func if user else (ep.id_utilizador_rececao or "---")
+        }
+        final.append(ep_dict)
+        
+    return final
 
 @router.patch("/episodes/{cod_epis}", response_model=EpisodioUrgencia, dependencies=[Depends(admin_only)])
 def atualizar_episodio(cod_epis: str, episodio_in: AtualizarEpisodio, sessao: Session = Depends(obter_sessao)):
@@ -621,76 +687,147 @@ def eliminar_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
     db_episodio = sessao.get(EpisodioUrgencia, cod_epis)
     if not db_episodio:
         raise HTTPException(status_code=404, detail="Episódio não encontrado")
+    
+    # VERIFICAÇÃO DE USO
+    # 1. Verificar triagem
+    if sessao.exec(select(Triagem).where(Triagem.cod_epis == cod_epis)).first():
+        raise HTTPException(status_code=400, detail="Este episódio já possui uma triagem registada e não pode ser eliminado para manter a integridade dos dados clínicos.")
+    
+    # 2. Verificar atos clínicos
+    if sessao.exec(select(Ato).where(Ato.cod_epis == cod_epis)).first():
+        raise HTTPException(status_code=400, detail="Não é possível eliminar este episódio porque existem atos clínicos interligados. O registo é necessário para o histórico do sistema.")
+
+    # 3. Verificar prescrições
+    if sessao.exec(select(Prescricao).where(Prescricao.cod_epis == cod_epis)).first():
+        raise HTTPException(status_code=400, detail="Este episódio contém prescrições médicas registadas e está usado no sistema. A remoção não é permitida por motivos de estabilidade e auditoria.")
+
+    # 4. Verificar internamento
+    if sessao.exec(select(Internamento).where(Internamento.cod_epis == cod_epis)).first():
+        raise HTTPException(status_code=400, detail="Este episódio resultou num internamento interligado. Para garantir a coerência da base de dados, o registo deve ser preservado.")
+
     sessao.delete(db_episodio)
     sessao.commit()
     return {"message": "Episódio eliminado com sucesso"}
 
 @router.get("/episodes/{cod_epis}/team")
 def obter_equipa_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
-    equipa = []
+    equipa_dict = {} # Usar dict para evitar duplicados por num_func
     
-    # Triagem
-    query_triagem = select(Triagem, Utilizador).join(
-        Utilizador, Triagem.num_func_enfermeiro == Utilizador.num_func, isouter=True
-    ).where(Triagem.cod_epis == cod_epis)
-    triagens = sessao.exec(query_triagem).all()
-    for t, u in triagens:
-        equipa.append({
-            "num_func": t.num_func_enfermeiro, 
-            "nome": u.nome_completo if u else f"Profissional {t.num_func_enfermeiro}",
-            "username": u.nome_utilizador if u else "---",
-            "tipo_func": "ENFERMEIRO", 
-            "papel": "Triagem", 
-            "data": t.data_h_triagem
-        })
-        
-    # Atos (via Envolve)
-    query_atos = select(Envolve, Utilizador, FuncionarioHospital).join(
-        FuncionarioHospital, Envolve.num_func == FuncionarioHospital.num_func
-    ).join(
-        Utilizador, Envolve.num_func == Utilizador.num_func, isouter=True
-    ).where(Envolve.cod_epis == cod_epis)
-    envolvimentos = sessao.exec(query_atos).all()
-    for e, u, f in envolvimentos:
-        equipa.append({
-            "num_func": e.num_func, 
-            "nome": u.nome_completo if u else f"Profissional {e.num_func}",
-            "username": u.nome_utilizador if u else "---",
-            "tipo_func": f.tipo_func, 
-            "papel": "Ato Clínico", 
-            "data": e.data_h_inicio
-        })
-        
-    # Prescrições
-    query_presc = select(Prescricao, Utilizador).join(
-        Utilizador, Prescricao.num_func_medico == Utilizador.num_func, isouter=True
-    ).where(Prescricao.cod_epis == cod_epis)
-    prescricoes = sessao.exec(query_presc).all()
-    for p, u in prescricoes:
-        equipa.append({
-            "num_func": p.num_func_medico, 
-            "nome": u.nome_completo if u else f"Médico {p.num_func_medico}",
-            "username": u.nome_utilizador if u else "---",
-            "tipo_func": "MEDICO", 
-            "papel": "Prescrição", 
-            "data": p.data_h_presc
-        })
+    # 1. Triagem (Enfermeiro)
+    try:
+        query_triagem = select(Triagem, Utilizador).join(
+            Utilizador, or_(Triagem.num_func_enfermeiro == Utilizador.num_func, Triagem.num_func_enfermeiro == Utilizador.id_utilizador), isouter=True
+        ).where(Triagem.cod_epis == cod_epis)
+        triagens = sessao.exec(query_triagem).all()
+        for t, u in triagens:
+            n_func = t.num_func_enfermeiro
+            equipa_dict[n_func] = {
+                "num_func": n_func, 
+                "nome": u.nome_completo if u else f"Profissional {n_func}",
+                "username": u.nome_utilizador if u else "---",
+                "tipo_func": "ENFERMEIRO", 
+                "papel": "Triagem", 
+                "data": t.data_h_triagem
+            }
+    except Exception as e:
+        print(f"DEBUG TEAM: Erro na triagem: {str(e)}")
+        sessao.rollback()
 
-    # Internamento
-    query_intern = select(Internamento, Utilizador).join(
-        Utilizador, Internamento.num_func_medico == Utilizador.num_func, isouter=True
-    ).where(Internamento.cod_epis == cod_epis)
-    internamentos = sessao.exec(query_intern).all()
-    for i, u in internamentos:
-        equipa.append({
-            "num_func": i.num_func_medico,
-            "nome": u.nome_completo if u else f"Médico {i.num_func_medico}",
-            "username": u.nome_utilizador if u else "---",
-            "tipo_func": "MEDICO",
-            "papel": "Internamento (Médico Responsável)",
-            "data": i.data_h_entrada
-        })
+    # 2. Atos Clínicos - Profissional Principal (Ato.num_func)
+    try:
+        query_atos_principal = select(Ato, Utilizador, FuncionarioHospital).join(
+            FuncionarioHospital, Ato.num_func == FuncionarioHospital.num_func
+        ).join(
+            Utilizador, or_(Ato.num_func == Utilizador.num_func, Ato.num_func == Utilizador.id_utilizador), isouter=True
+        ).where(Ato.cod_epis == cod_epis)
         
+        atos_principais = sessao.exec(query_atos_principal).all()
+        for a, u, f in atos_principais:
+            n_func = a.num_func
+            equipa_dict[n_func] = {
+                "num_func": n_func, 
+                "nome": u.nome_completo if u else f"Profissional {n_func}",
+                "username": u.nome_utilizador if u else "---",
+                "tipo_func": f.tipo_func, 
+                "papel": f"Ato Clínico ({a.tipo})", 
+                "data": a.data_h_inicio
+            }
+    except Exception as e:
+        print(f"DEBUG TEAM: Erro na triagem: {str(e)}")
+        sessao.rollback()
+
+    # 3. Atos Clínicos - Profissionais Envolvidos (via Envolve)
+    try:
+        query_envolve = select(Envolve, Utilizador, FuncionarioHospital, Ato).join(
+            Ato, Envolve.id_ato == Ato.id_ato
+        ).join(
+            FuncionarioHospital, Envolve.num_func == FuncionarioHospital.num_func
+        ).join(
+            Utilizador, or_(Envolve.num_func == Utilizador.num_func, Envolve.num_func == Utilizador.id_utilizador), isouter=True
+        ).where(Ato.cod_epis == cod_epis)
+        
+        envolvimentos = sessao.exec(query_envolve).all()
+        for env, u, f, a in envolvimentos:
+            n_func = env.num_func
+            if n_func not in equipa_dict:
+                equipa_dict[n_func] = {
+                    "num_func": n_func, 
+                    "nome": u.nome_completo if u else f"Profissional {n_func}",
+                    "username": u.nome_utilizador if u else "---",
+                    "tipo_func": f.tipo_func, 
+                    "papel": f"Apoio em Ato ({a.tipo})", 
+                    "data": a.data_h_inicio
+                }
+    except Exception as e:
+        print(f"DEBUG TEAM: Erro nos envolvimentos: {str(e)}")
+        sessao.rollback()
+
+    # 4. Prescrições (Médico)
+    try:
+        query_presc = select(Prescricao, Utilizador).join(
+            Utilizador, or_(Prescricao.num_func_medico == Utilizador.num_func, Prescricao.num_func_medico == Utilizador.id_utilizador), isouter=True
+        ).where(Prescricao.cod_epis == cod_epis)
+        prescricoes = sessao.exec(query_presc).all()
+        for p, u in prescricoes:
+            n_func = p.num_func_medico
+            if n_func not in equipa_dict:
+                equipa_dict[n_func] = {
+                    "num_func": n_func, 
+                    "nome": u.nome_completo if u else f"Médico {n_func}",
+                    "username": u.nome_utilizador if u else "---",
+                    "tipo_func": "MEDICO", 
+                    "papel": "Prescrição", 
+                    "data": p.data_h_presc
+                }
+    except Exception as e:
+        print(f"DEBUG TEAM: Erro nas prescrições: {str(e)}")
+        sessao.rollback()
+
+    # 5. Internamento (Médico Responsável)
+    try:
+        query_intern = select(Internamento, Utilizador).join(
+            Utilizador, or_(Internamento.num_func_medico == Utilizador.num_func, Internamento.num_func_medico == Utilizador.id_utilizador), isouter=True
+        ).where(Internamento.cod_epis == cod_epis)
+        internamentos = sessao.exec(query_intern).all()
+        for i, u in internamentos:
+            n_func = i.num_func_medico
+            if n_func not in equipa_dict:
+                equipa_dict[n_func] = {
+                    "num_func": n_func,
+                    "nome": u.nome_completo if u else f"Médico {n_func}",
+                    "username": u.nome_utilizador if u else "---",
+                    "tipo_func": "MEDICO",
+                    "papel": "Internamento (Médico Responsável)",
+                    "data": i.data_h_entrada
+                }
+    except Exception as e:
+        print(f"DEBUG TEAM: Erro no internamento: {str(e)}")
+        sessao.rollback()
+        
+    # Converter para lista e ordenar por data
+    equipa = list(equipa_dict.values())
+    equipa.sort(key=lambda x: x["data"] if x["data"] else datetime.min, reverse=True)
+    
     return equipa
 
 @router.get("/episodes/{cod_epis}/journey")
@@ -699,84 +836,112 @@ def obter_percurso_episodio(
     sessao: Session = Depends(obter_sessao),
     utilizador = Depends(obter_utilizador_atual)
 ):
-    episodio = sessao.get(EpisodioUrgencia, cod_epis)
-    if not episodio:
-        raise HTTPException(status_code=404, detail="Episódio não encontrado")
-    
-    # Validar Permissões
-    role = getattr(utilizador, "role_name", "USER")
-    if role == "UTENTE":
-        if episodio.id_utente != utilizador.num_utente:
-            raise HTTPException(status_code=403, detail="Não tem permissão para aceder a este episódio")
-    elif role != "ADMIN":
-        # Se não for admin nem o próprio utente, bloquear (comportamento original era admin_only)
-        raise HTTPException(status_code=403, detail="Apenas administradores podem aceder ao percurso global")
-
-    utente = sessao.get(Utente, episodio.id_utente)
-    
-    # Triagem com LEFT JOIN
-    query_triagem = select(Triagem, Utilizador).join(
-        Utilizador, Triagem.num_func_enfermeiro == Utilizador.num_func, isouter=True
-    ).where(Triagem.cod_epis == cod_epis)
-    res_triagem = sessao.exec(query_triagem).first()
-    triagem_final = None
-    if res_triagem:
-        t, u = res_triagem
-        triagem_final = t.dict()
-        triagem_final["enfermeiro_nome"] = u.nome_completo if u else f"Enf. {t.num_func_enfermeiro}"
-        triagem_final["enfermeiro_username"] = u.nome_utilizador if u else "---"
-
-    # Atos com LEFT JOIN
-    query_atos = select(Ato, Utilizador).join(
-        Utilizador, Ato.num_func == Utilizador.num_func, isouter=True
-    ).where(Ato.cod_epis == cod_epis)
-    res_atos = sessao.exec(query_atos).all()
-    atos_finais = []
-    for a, u in res_atos:
-        ato_dict = a.dict()
-        ato_dict["profissional_nome"] = u.nome_completo if u else f"Prof. {a.num_func}"
-        ato_dict["profissional_username"] = u.nome_utilizador if u else "---"
-        atos_finais.append(ato_dict)
-
-    # Prescrições com LEFT JOIN
-    query_presc = select(Prescricao, Utilizador).join(
-        Utilizador, Prescricao.num_func_medico == Utilizador.num_func, isouter=True
-    ).where(Prescricao.cod_epis == cod_epis)
-    res_presc = sessao.exec(query_presc).all()
-    presc_finais = []
-    for p, u in res_presc:
-        presc_dict = p.dict()
-        presc_dict["medico_nome"] = u.nome_completo if u else f"Dr. {p.num_func_medico}"
-        presc_dict["medico_username"] = u.nome_utilizador if u else "---"
-        presc_finais.append(presc_dict)
-
-    # Internamento com LEFT JOIN
-    query_intern = select(Internamento, Utilizador).join(
-        Utilizador, Internamento.num_func_medico == Utilizador.num_func, isouter=True
-    ).where(Internamento.cod_epis == cod_epis)
-    res_intern = sessao.exec(query_intern).first()
-    intern_final = None
-    if res_intern:
-        i, u = res_intern
-        intern_final = i.dict()
-        intern_final["medico_nome"] = u.nome_completo if u else f"Dr. {i.num_func_medico}"
-        intern_final["medico_username"] = u.nome_utilizador if u else "---"
+    try:
+        # 1. Episódio e Rececionista
+        query_ep = select(EpisodioUrgencia, Utilizador).join(
+            Utilizador, EpisodioUrgencia.id_utilizador_rececao == Utilizador.id_utilizador, isouter=True
+        ).where(EpisodioUrgencia.cod_epis == cod_epis)
         
-    equipa = obter_equipa_episodio(cod_epis, sessao)
-    
-    # Logs de auditoria relacionados a este episódio
-    logs = sessao.exec(select(AuditLog).where(AuditLog.id_recurso == cod_epis)).all()
-    
-    return {
-        "episodio": episodio,
-        "utente": utente,
-        "triagem": triagem_final,
-        "atos": atos_finais,
-        "prescricoes": presc_finais,
-        "internamento": intern_final,
-        "equipa": equipa,
-        "logs_auditoria": logs
-    }
+        res_ep = sessao.exec(query_ep).first()
+        if not res_ep:
+            raise HTTPException(status_code=404, detail="Episódio não encontrado")
+        
+        episodio, rececionista = res_ep
+        utente = sessao.get(Utente, episodio.id_utente)
+        
+        ep_dict = episodio.dict()
+        # Campos de compatibilidade
+        ep_dict["rececionista_nome"] = rececionista.nome_completo if rececionista else "Desconhecido"
+        ep_dict["rececionista_username"] = rececionista.nome_utilizador if rececionista else "---"
+        # Novo padrão uniforme
+        ep_dict["profissional_info"] = {
+            "nome": ep_dict["rececionista_nome"],
+            "username": ep_dict["rececionista_username"],
+            "num_func": rececionista.num_func if rececionista else (episodio.id_utilizador_rececao or "---")
+        }
+
+        # 2. Triagem
+        query_triagem = select(Triagem, Utilizador).join(
+            Utilizador, or_(Triagem.num_func_enfermeiro == Utilizador.num_func, Triagem.num_func_enfermeiro == Utilizador.id_utilizador), isouter=True
+        ).where(Triagem.cod_epis == cod_epis)
+        res_triagem = sessao.exec(query_triagem).first()
+        
+        triagem_final = None
+        if res_triagem:
+            t, u = res_triagem
+            triagem_final = t.dict()
+            triagem_final["enfermeiro_nome"] = u.nome_completo if u else f"Enfermeiro {t.num_func_enfermeiro}"
+            triagem_final["enfermeiro_username"] = u.nome_utilizador if u else "---"
+            triagem_final["profissional_info"] = {
+                "nome": triagem_final["enfermeiro_nome"],
+                "username": triagem_final["enfermeiro_username"],
+                "num_func": t.num_func_enfermeiro
+            }
+
+        # 3. Atos (Ordenados cronologicamente)
+        query_atos = select(Ato, Utilizador).join(
+            Utilizador, or_(Ato.num_func == Utilizador.num_func, Ato.num_func == Utilizador.id_utilizador), isouter=True
+        ).where(Ato.cod_epis == cod_epis).order_by(Ato.data_h_inicio.asc())
+        res_atos = sessao.exec(query_atos).all()
+        atos_finais = []
+        for a, u in res_atos:
+            ato_dict = a.dict()
+            ato_dict["profissional_nome"] = u.nome_completo if u else f"Profissional {a.num_func}"
+            ato_dict["profissional_username"] = u.nome_utilizador if u else "---"
+            ato_dict["profissional_info"] = {
+                "nome": ato_dict["profissional_nome"],
+                "username": ato_dict["profissional_username"],
+                "num_func": a.num_func
+            }
+            atos_finais.append(ato_dict)
+
+        # 4. Prescrições (Ordenadas cronologicamente)
+        query_presc = select(Prescricao, Utilizador).join(
+            Utilizador, or_(Prescricao.num_func_medico == Utilizador.num_func, Prescricao.num_func_medico == Utilizador.id_utilizador), isouter=True
+        ).where(Prescricao.cod_epis == cod_epis).order_by(Prescricao.data_h_presc.asc())
+        res_presc = sessao.exec(query_presc).all()
+        presc_finais = []
+        for p, u in res_presc:
+            presc_dict = p.dict()
+            presc_dict["medico_nome"] = u.nome_completo if u else f"Médico {p.num_func_medico}"
+            presc_dict["medico_username"] = u.nome_utilizador if u else "---"
+            presc_dict["profissional_info"] = {
+                "nome": presc_dict["medico_nome"],
+                "username": presc_dict["medico_username"],
+                "num_func": p.num_func_medico
+            }
+            presc_finais.append(presc_dict)
+
+        # 5. Internamento
+        query_intern = select(Internamento, Utilizador).join(
+            Utilizador, or_(Internamento.num_func_medico == Utilizador.num_func, Internamento.num_func_medico == Utilizador.id_utilizador), isouter=True
+        ).where(Internamento.cod_epis == cod_epis)
+        res_intern = sessao.exec(query_intern).first()
+        intern_final = None
+        if res_intern:
+            i, u = res_intern
+            intern_final = i.dict()
+            intern_final["medico_nome"] = u.nome_completo if u else f"Médico {i.num_func_medico}"
+            intern_final["medico_username"] = u.nome_utilizador if u else "---"
+            intern_final["profissional_info"] = {
+                "nome": intern_final["medico_nome"],
+                "username": intern_final["medico_username"],
+                "num_func": i.num_func_medico
+            }
+            
+        return {
+            "episodio": ep_dict,
+            "utente": utente,
+            "triagem": triagem_final,
+            "atos": atos_finais,
+            "prescricoes": presc_finais,
+            "internamento": intern_final,
+            "equipa": obter_equipa_episodio(cod_epis, sessao)
+        }
+    except Exception as e:
+        print(f"ERRO JOURNEY: {str(e)}")
+        sessao.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/episodes/awaiting-triage")
 def ler_episodios_aguardando_triagem(
@@ -794,8 +959,8 @@ def ler_episodios_aguardando_triagem(
     if id_hospital:
         query = query.where(EpisodioUrgencia.id_hospital == id_hospital)
     
-    # Ordem de chegada (mais antigos primeiro)
-    query = query.order_by(EpisodioUrgencia.data_h_entrada.asc())
+    # Ordem de chegada (mais recentes primeiro)
+    query = query.order_by(EpisodioUrgencia.data_h_entrada.desc())
     
     resultados = sessao.exec(query).all()
     
@@ -804,6 +969,11 @@ def ler_episodios_aguardando_triagem(
         ep_dict = ep.dict()
         ep_dict["rececionista_nome"] = user.nome_completo if user else f"Utilizador {ep.id_utilizador_rececao}"
         ep_dict["rececionista_username"] = user.nome_utilizador if user else "---"
+        ep_dict["profissional_info"] = {
+            "nome": ep_dict["rececionista_nome"],
+            "username": ep_dict["rececionista_username"],
+            "num_func": user.num_func if user else (ep.id_utilizador_rececao or "---")
+        }
         final.append(ep_dict)
         
     return final
@@ -853,8 +1023,14 @@ def ler_episodios_aguardando_medico(
         })
     
     # Ordenação lógica: Vermelho > Laranja > Amarelo > Verde > Azul
+    # Dentro da mesma prioridade, mostrar os mais recentes primeiro conforme solicitado
     ordem = {"VERMELHO": 0, "LARANJA": 1, "AMARELO": 2, "VERDE": 3, "AZUL": 4}
-    fila.sort(key=lambda x: (ordem.get(x["prioridade"], 9), x["data_h_entrada"]))
+    fila.sort(key=lambda x: (ordem.get(x["prioridade"], 9), x["data_h_entrada"]), reverse=False)
+    
+    # Nota: A ordenação por data_h_entrada para "mais recentes primeiro" 
+    # exigiria reverse=True para a data, mas reverse=False para a prioridade.
+    # Vou ajustar a lógica do key para permitir ordenação mista:
+    fila.sort(key=lambda x: (ordem.get(x["prioridade"], 9), -x["data_h_entrada"].timestamp()))
     
     print(f"DEBUG: Fila para hospital '{id_hospital}' tem {len(fila)} pacientes.")
     
@@ -862,14 +1038,21 @@ def ler_episodios_aguardando_medico(
 
 @router.get("/episodes/{cod_epis}")
 def obter_episodio_detalhado(cod_epis: str, sessao: Session = Depends(obter_sessao)):
-    episodio = sessao.get(EpisodioUrgencia, cod_epis)
-    if not episodio:
+    # Join com Utilizador para obter o rececionista
+    query = select(EpisodioUrgencia, Utilizador).join(
+        Utilizador, EpisodioUrgencia.id_utilizador_rececao == Utilizador.id_utilizador, isouter=True
+    ).where(EpisodioUrgencia.cod_epis == cod_epis)
+    
+    res = sessao.exec(query).first()
+    if not res:
         raise HTTPException(status_code=404, detail="Episódio não encontrado")
+    
+    episodio, rececionista = res
     utente = sessao.get(Utente, episodio.id_utente)
     
     # Triagem com nome do enfermeiro (LEFT JOIN)
     query_triagem = select(Triagem, Utilizador).join(
-        Utilizador, Triagem.num_func_enfermeiro == Utilizador.num_func, isouter=True
+        Utilizador, or_(Triagem.num_func_enfermeiro == Utilizador.num_func, Triagem.num_func_enfermeiro == Utilizador.id_utilizador), isouter=True
     ).where(Triagem.cod_epis == cod_epis)
     res_triagem = sessao.exec(query_triagem).first()
     
@@ -877,7 +1060,11 @@ def obter_episodio_detalhado(cod_epis: str, sessao: Session = Depends(obter_sess
     if res_triagem:
         t, u = res_triagem
         triagem_data = t.dict()
-        triagem_data["enfermeiro_nome"] = u.nome_completo if u else f"Enf. {t.num_func_enfermeiro}"
+        triagem_data["profissional_info"] = {
+            "nome": u.nome_completo if u else f"Enfermeiro {t.num_func_enfermeiro}",
+            "username": u.nome_utilizador if u else "---",
+            "num_func": t.num_func_enfermeiro
+        }
 
     return {
         "cod_epis": episodio.cod_epis,
@@ -885,6 +1072,11 @@ def obter_episodio_detalhado(cod_epis: str, sessao: Session = Depends(obter_sess
         "id_utente": episodio.id_utente,
         "id_hospital": episodio.id_hospital,
         "sintomas_iniciais": episodio.sintomas,
+        "profissional_info": {
+            "nome": rececionista.nome_completo if rececionista else "Utilizador Desconhecido",
+            "username": rececionista.nome_utilizador if rececionista else "---",
+            "num_func": rececionista.num_func if rececionista else (episodio.id_utilizador_rececao or "---")
+        },
         "utente": utente,
         "triagem": triagem_data
     }
@@ -893,6 +1085,21 @@ def obter_episodio_detalhado(cod_epis: str, sessao: Session = Depends(obter_sess
 def listar_servicos_hospital(nome_hosp: str, sessao: Session = Depends(obter_sessao)):
     return sessao.exec(select(ServicoHospitalar).where(ServicoHospitalar.id_hosp == nome_hosp)).all()
 
+@router.get("/services/{id_servico}/available-beds")
+def listar_camas_disponiveis(id_servico: int, sessao: Session = Depends(obter_sessao)):
+    # Obter camas ocupadas para este serviço
+    query_ocupadas = select(Internamento.num_cama).where(
+        Internamento.id_servico == id_servico,
+        Internamento.data_h_saida == None
+    )
+    camas_ocupadas = sessao.exec(query_ocupadas).all()
+    
+    # Cada especialidade tem 15 camas (1 a 15)
+    todas_camas = list(range(1, 16))
+    camas_livres = [c for c in todas_camas if c not in camas_ocupadas]
+    
+    return {"id_servico": id_servico, "camas_disponiveis": camas_livres}
+
 @router.post("/internamentos", response_model=Internamento)
 def criar_internamento(internamento: Internamento, sessao: Session = Depends(obter_sessao)):
     sessao.add(internamento)
@@ -900,7 +1107,7 @@ def criar_internamento(internamento: Internamento, sessao: Session = Depends(obt
     # Ao internar, o episódio de urgência termina
     episodio = sessao.get(EpisodioUrgencia, internamento.cod_epis)
     if episodio:
-        episodio.data_h_saida = datetime.now()
+        episodio.data_h_saida = datetime.now(timezone.utc)
         sessao.add(episodio)
     
     sessao.commit()
@@ -940,7 +1147,7 @@ def registar_triagem_manchester(dados: CriarTriagem, sessao: Session = Depends(o
         sintomas=dados.sintomas,
         observacoes=dados.observacoes,
         num_func_enfermeiro=dados.num_func_enfermeiro,
-        data_h_triagem=datetime.now()
+        data_h_triagem=datetime.now(timezone.utc)
     )
     
     sessao.add(db_triagem)
@@ -950,72 +1157,84 @@ def registar_triagem_manchester(dados: CriarTriagem, sessao: Session = Depends(o
 
 @router.get("/utentes/{num_utente}/history")
 def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sessao), utilizador = Depends(obter_utilizador_atual)):
-    # Validar se o utilizador tem permissão (Médico, Enfermeiro, Admin ou o próprio Utente)
-    role = getattr(utilizador, "role_name", "USER")
+    # 1. Episódios com Rececionista
+    query = select(EpisodioUrgencia, Utilizador).join(
+        Utilizador, EpisodioUrgencia.id_utilizador_rececao == Utilizador.id_utilizador, isouter=True
+    ).where(EpisodioUrgencia.id_utente == num_utente).order_by(EpisodioUrgencia.data_h_entrada.desc())
     
-    if role == "UTENTE":
-        if int(utilizador.num_utente) != num_utente:
-            raise HTTPException(status_code=403, detail="Apenas pode aceder ao seu próprio histórico")
-    elif role not in ["ADMIN", "MEDICO", "ENFERMEIRO"]:
-        raise HTTPException(status_code=403, detail="Não tem permissão para aceder a este histórico")
-    
-    # 1. Obter todos os episódios do utente
-    episodios = sessao.exec(
-        select(EpisodioUrgencia).where(EpisodioUrgencia.id_utente == num_utente).order_by(EpisodioUrgencia.data_h_entrada.desc())
-    ).all()
+    resultados_ep = sessao.exec(query).all()
     
     historico = []
-    for ep in episodios:
-        # Triagem com nome (LEFT JOIN)
+    for ep, rececionista in resultados_ep:
+        ep_dict = ep.dict()
+        ep_dict["profissional_info"] = {
+            "nome": rececionista.nome_completo if rececionista else f"Rececionista {ep.id_utilizador_rececao or '---'}",
+            "username": rececionista.nome_utilizador if rececionista else "---",
+            "num_func": rececionista.num_func if rececionista else "---"
+        }
+
+        # Triagem
         query_triagem = select(Triagem, Utilizador).join(
-            Utilizador, Triagem.num_func_enfermeiro == Utilizador.num_func, isouter=True
+            Utilizador, or_(Triagem.num_func_enfermeiro == Utilizador.num_func, Triagem.num_func_enfermeiro == Utilizador.id_utilizador), isouter=True
         ).where(Triagem.cod_epis == ep.cod_epis)
         res_triagem = sessao.exec(query_triagem).first()
         triagem_final = None
         if res_triagem:
             t, u = res_triagem
             triagem_final = t.dict()
-            triagem_final["enfermeiro_nome"] = u.nome_completo if u else f"Enf. {t.num_func_enfermeiro}"
-            triagem_final["enfermeiro_username"] = u.nome_utilizador if u else "---"
+            triagem_final["profissional_info"] = {
+                "nome": u.nome_completo if u else f"Enfermeiro {t.num_func_enfermeiro}",
+                "username": u.nome_utilizador if u else "---",
+                "num_func": t.num_func_enfermeiro
+            }
 
-        # Atos com nome (LEFT JOIN)
+        # Atos (Ordenados cronologicamente)
         query_atos = select(Ato, Utilizador).join(
-            Utilizador, Ato.num_func == Utilizador.num_func, isouter=True
-        ).where(Ato.cod_epis == ep.cod_epis)
+            Utilizador, or_(Ato.num_func == Utilizador.num_func, Ato.num_func == Utilizador.id_utilizador), isouter=True
+        ).where(Ato.cod_epis == ep.cod_epis).order_by(Ato.data_h_inicio.asc())
         res_atos = sessao.exec(query_atos).all()
         atos_finais = []
         for a, u in res_atos:
             ato_dict = a.dict()
-            ato_dict["profissional_nome"] = u.nome_completo if u else f"Prof. {a.num_func}"
-            ato_dict["profissional_username"] = u.nome_utilizador if u else "---"
+            ato_dict["profissional_info"] = {
+                "nome": u.nome_completo if u else f"Profissional {a.num_func}",
+                "username": u.nome_utilizador if u else "---",
+                "num_func": a.num_func
+            }
             atos_finais.append(ato_dict)
 
-        # Prescrições com nome (LEFT JOIN)
+        # Prescrições (Ordenadas cronologicamente)
         query_presc = select(Prescricao, Utilizador).join(
-            Utilizador, Prescricao.num_func_medico == Utilizador.num_func, isouter=True
-        ).where(Prescricao.cod_epis == ep.cod_epis)
+            Utilizador, or_(Prescricao.num_func_medico == Utilizador.num_func, Prescricao.num_func_medico == Utilizador.id_utilizador), isouter=True
+        ).where(Prescricao.cod_epis == ep.cod_epis).order_by(Prescricao.data_h_presc.asc())
         res_presc = sessao.exec(query_presc).all()
         presc_finais = []
         for p, u in res_presc:
             presc_dict = p.dict()
-            presc_dict["medico_nome"] = u.nome_completo if u else f"Dr. {p.num_func_medico}"
-            presc_dict["medico_username"] = u.nome_utilizador if u else "---"
+            presc_dict["profissional_info"] = {
+                "nome": u.nome_completo if u else f"Médico {p.num_func_medico}",
+                "username": u.nome_utilizador if u else "---",
+                "num_func": p.num_func_medico
+            }
             presc_finais.append(presc_dict)
 
-        # Internamento com nome (LEFT JOIN)
+        # Internamento
         query_intern = select(Internamento, Utilizador).join(
-            Utilizador, Internamento.num_func_medico == Utilizador.num_func, isouter=True
+            Utilizador, or_(Internamento.num_func_medico == Utilizador.num_func, Internamento.num_func_medico == Utilizador.id_utilizador), isouter=True
         ).where(Internamento.cod_epis == ep.cod_epis)
         res_intern = sessao.exec(query_intern).first()
         intern_final = None
         if res_intern:
             i, u = res_intern
             intern_final = i.dict()
-            intern_final["medico_nome"] = u.nome_completo if u else f"Dr. {i.num_func_medico}"
-            intern_final["medico_username"] = u.nome_utilizador if u else "---"
+            intern_final["profissional_info"] = {
+                "nome": u.nome_completo if u else f"Médico {i.num_func_medico}",
+                "username": u.nome_utilizador if u else "---",
+                "num_func": i.num_func_medico
+            }
         
         historico.append({
-            "episodio": ep,
+            "episodio": ep_dict,
             "triagem": triagem_final,
             "atos": atos_finais,
             "prescricoes": presc_finais,
@@ -1024,19 +1243,34 @@ def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sess
     
     return historico
 
-@router.get("/episodes/{cod_epis}/prescriptions", response_model=List[Prescricao])
+@router.get("/episodes/{cod_epis}/prescriptions")
 def listar_prescricoes_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)):
-    return sessao.exec(select(Prescricao).where(Prescricao.cod_epis == cod_epis)).all()
+    query = select(Prescricao, Utilizador).join(
+        Utilizador, or_(Prescricao.num_func_medico == Utilizador.num_func, Prescricao.num_func_medico == Utilizador.id_utilizador), isouter=True
+    ).where(Prescricao.cod_epis == cod_epis)
+    
+    resultados = sessao.exec(query).all()
+    
+    presc_finais = []
+    for p, u in resultados:
+        p_dict = p.dict()
+        p_dict["medico_nome"] = u.nome_completo if u else f"Dr. {p.num_func_medico}"
+        p_dict["medico_username"] = u.nome_utilizador if u else "---"
+        presc_finais.append(p_dict)
+        
+    return presc_finais
 
 # ATOS
 @router.post("/atos", response_model=Ato)
 def criar_ato(ato: Ato, sessao: Session = Depends(obter_sessao)):
     sessao.add(ato)
+    sessao.flush() # Importante para obter id_ato
     
     # Registar na tabela original ENVOLVE
     db_envolve = Envolve(
-        data_h_inicio=ato.data_h_inicio,
+        id_ato=ato.id_ato,
         num_func=ato.num_func,
+        data_h_inicio=ato.data_h_inicio,
         cod_epis=ato.cod_epis,
         id_hosp=ato.id_hosp
     )
@@ -1046,7 +1280,7 @@ def criar_ato(ato: Ato, sessao: Session = Depends(obter_sessao)):
     if ato.decisao_clinica == "ALTA":
         episodio = sessao.get(EpisodioUrgencia, ato.cod_epis)
         if episodio:
-            episodio.data_h_saida = datetime.now()
+            episodio.data_h_saida = datetime.now(timezone.utc)
             sessao.add(episodio)
             
     sessao.commit()
@@ -1076,7 +1310,7 @@ def listar_internamentos(id_hospital: Optional[str] = None, em_aberto: bool = Tr
         # Obter nome do médico responsável
         medico_nome = "---"
         if intern.num_func_medico:
-            u_medico = sessao.exec(select(Utilizador).where(Utilizador.num_func == intern.num_func_medico)).first()
+            u_medico = sessao.exec(select(Utilizador).where(or_(Utilizador.num_func == intern.num_func_medico, Utilizador.id_utilizador == intern.num_func_medico))).first()
             if u_medico:
                 medico_nome = u_medico.nome_completo
 
@@ -1099,7 +1333,7 @@ def dar_alta_internamento(num_internamento: int, sessao: Session = Depends(obter
     if not internamento:
         raise HTTPException(status_code=404, detail="Internamento não encontrado")
     
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     internamento.data_h_saida = agora
     sessao.add(internamento)
     
@@ -1126,7 +1360,7 @@ def dar_alta(cod_epis: str, sessao: Session = Depends(obter_sessao)):
     episodio = sessao.get(EpisodioUrgencia, cod_epis)
     if not episodio:
         raise HTTPException(status_code=404, detail="Episódio não encontrado")
-    episodio.data_h_saida = datetime.now()
+    episodio.data_h_saida = datetime.now(timezone.utc)
     sessao.add(episodio)
     sessao.commit()
     return {"message": "Paciente teve alta"}

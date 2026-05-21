@@ -1,6 +1,6 @@
 from sqlmodel import SQLModel, Field, Column, String, ForeignKey, Integer, Boolean, DateTime, Text, Date
 from typing import Optional, List
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 
 from pydantic import ConfigDict
 
@@ -51,7 +51,7 @@ class AuditLog(SQLModel, table=True):
     id_recurso: Optional[str] = None
     detalhes: Optional[str] = None
     ip_origem: Optional[str] = None
-    data_hora: datetime = Field(default_factory=datetime.now)
+    data_hora: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class Hospital(SQLModel, table=True):
     nome_hosp: str = Field(primary_key=True)
@@ -108,12 +108,13 @@ class Triagem(SQLModel, table=True):
     temperatura: Optional[float] = None
     sintomas: Optional[str] = None
     observacoes: Optional[str] = None
-    data_h_triagem: datetime = Field(sa_column=Column("data_h_triage", DateTime, default=datetime.now))
+    data_h_triagem: datetime = Field(sa_column=Column("data_h_triage", DateTime, default=lambda: datetime.now(timezone.utc)))
     num_func_enfermeiro: int = Field(foreign_key="enfermeiro.num_func")
 
 class Ato(SQLModel, table=True):
+    id_ato: Optional[int] = Field(default=None, primary_key=True)
     tipo: str
-    data_h_inicio: datetime = Field(primary_key=True)
+    data_h_inicio: datetime = Field(index=True)
     data_h_fim: Optional[datetime] = None
     cod_epis: str = Field(foreign_key="episodio_urgencia.cod_epis")
     id_hosp: str = Field(foreign_key="hospital.nome_hosp")
@@ -125,17 +126,15 @@ class Ato(SQLModel, table=True):
 
 class Envolve(SQLModel, table=True):
     __tablename__ = "Envolve"
-    data_h_inicio: datetime = Field(primary_key=True, foreign_key="ato.data_h_inicio")
+    id_ato: int = Field(primary_key=True, foreign_key="ato.id_ato")
     num_func: int = Field(primary_key=True, foreign_key="funcionario_hospital.num_func")
-    cod_epis: str = Field(primary_key=True, foreign_key="episodio_urgencia.cod_epis")
-    id_hosp: str = Field(primary_key=True, foreign_key="hospital.nome_hosp")
 
 class Prescricao(SQLModel, table=True):
     num_prescricao: Optional[int] = Field(default=None, primary_key=True)
     cod_epis: str = Field(foreign_key="episodio_urgencia.cod_epis")
     medicamento: str
     dosagem: Optional[str] = None
-    data_h_presc: datetime = Field(default_factory=datetime.now)
+    data_h_presc: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     num_func_medico: int = Field(foreign_key="medico.num_func")
 
 class ServicoHospitalar(SQLModel, table=True):
@@ -149,6 +148,6 @@ class Internamento(SQLModel, table=True):
     cod_epis: str = Field(foreign_key="episodio_urgencia.cod_epis")
     id_servico: int = Field(foreign_key="servico_hospitalar.id_servico")
     num_cama: Optional[int] = None
-    data_h_entrada: datetime = Field(default_factory=datetime.now)
+    data_h_entrada: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     data_h_saida: Optional[datetime] = None
     num_func_medico: Optional[int] = Field(default=None, foreign_key="medico.num_func")

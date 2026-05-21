@@ -3,9 +3,16 @@ from sqlmodel import Session, select, func
 from typing import Optional, List
 from ..core.db import obter_sessao
 from ..models.models import EpisodioUrgencia, Triagem
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+from .clinical import obter_sessao
+from ai.analytics_afluencia import executar_analytics
 
 router = APIRouter()
+
+@router.get("/afluencia-random-forest")
+def analytics_afluencia_random_forest():
+    return executar_analytics()
 
 @router.get("/wait-times")
 def obter_tempos_espera(sessao: Session = Depends(obter_sessao)):
@@ -22,7 +29,7 @@ def obter_tempos_espera(sessao: Session = Depends(obter_sessao)):
 @router.get("/patient-flow")
 def obter_fluxo_pacientes(sessao: Session = Depends(obter_sessao)):
     # Count episodes in the last 24 hours
-    há_um_dia = datetime.now() - timedelta(days=1)
+    há_um_dia = datetime.now(timezone.utc) - timedelta(days=1)
     contagem = sessao.exec(select(func.count(EpisodioUrgencia.cod_epis)).where(EpisodioUrgencia.data_h_entrada >= há_um_dia)).one()
 
     return {
@@ -32,7 +39,7 @@ def obter_fluxo_pacientes(sessao: Session = Depends(obter_sessao)):
 
 @router.get("/dashboard-summary")
 def dashboard_summary(id_hospital: Optional[str] = None, sessao: Session = Depends(obter_sessao)):
-    agora = datetime.now()
+    agora = datetime.now(timezone.utc)
     
     # Base query for open episodes that have been triaged
     query = select(EpisodioUrgencia, Triagem).join(

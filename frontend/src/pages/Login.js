@@ -24,9 +24,16 @@ const Login = () => {
       // Se for a primeira vez (setup), temos de ativar o MFA antes de validar o login final
       if (mfaSetup) {
           try {
-            const sucesso = await validarMFA(nomeUtilizador, mfaCode);
-            if (sucesso) navigate('/dashboard');
-            else setError('Código de ativação inválido.');
+            const resultadoMFA = await validarMFA(nomeUtilizador, mfaCode);
+            if (resultadoMFA.sucesso) {
+              if (resultadoMFA.role === 'ADMIN') {
+                navigate('/dashboard');
+              } else {
+                navigate('/select-hospital');
+              }
+            } else {
+              setError('Código de ativação inválido.');
+            }
           } catch (err) {
             setError('Erro ao ativar MFA.');
           }

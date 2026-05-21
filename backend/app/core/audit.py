@@ -1,7 +1,7 @@
 from fastapi import Request
 from sqlmodel import Session
 from ..models.models import AuditLog
-from datetime import datetime
+from datetime import datetime, timezone
 
 def log_audit(db: Session, id_utilizador: int, acao: str, recurso: str, id_recurso: str = None, detalhes: str = None, request: Request = None):
     ip = request.client.host if request else "unknown"
@@ -13,7 +13,7 @@ def log_audit(db: Session, id_utilizador: int, acao: str, recurso: str, id_recur
         id_recurso=id_recurso,
         detalhes=detalhes,
         ip_origem=ip,
-        data_hora=datetime.now()
+        data_hora=datetime.now(timezone.utc)
     )
     db.add(novo_log)
     db.commit()

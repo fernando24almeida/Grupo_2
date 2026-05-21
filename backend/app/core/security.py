@@ -1,5 +1,5 @@
 from passlib.context import CryptContext
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import jwt, JWTError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
@@ -18,9 +18,9 @@ def obter_hash_palavra_passe(palavra_passe):
 def criar_token_acesso(dados: dict, expira_delta: timedelta = None):
     para_codificar = dados.copy()
     if expira_delta:
-        expira = datetime.utcnow() + expira_delta
+        expira = datetime.now(timezone.utc) + expira_delta
     else:
-        expira = datetime.utcnow() + timedelta(minutes=configuracoes.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expira = datetime.now(timezone.utc) + timedelta(minutes=configuracoes.ACCESS_TOKEN_EXPIRE_MINUTES)
     para_codificar.update({"exp": expira})
     jwt_codificado = jwt.encode(para_codificar, configuracoes.SECRET_KEY, algorithm=configuracoes.ALGORITHM)
     return jwt_codificado

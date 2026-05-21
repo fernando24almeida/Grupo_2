@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import List
 
 from faker import Faker
@@ -285,7 +285,7 @@ def criar_episodios(sessao: Session, utentes: List[int], hospitais: List[str]) -
     ]
 
     episodios = []
-    base = datetime.now() - timedelta(days=180)
+    base = datetime.now(timezone.utc) - timedelta(days=180)
 
     codigos_existentes = sessao.exec(select(EpisodioUrgencia.cod_epis)).all()
 
@@ -343,7 +343,7 @@ def criar_triagens(
             prioridade=escolher(prioridades),
             sintomas=fake.sentence(nb_words=6),
             observacoes=fake.sentence(nb_words=10),
-            data_h_triagem=datetime.now() - timedelta(days=random.randint(0, 180)),
+            data_h_triagem=datetime.now(timezone.utc) - timedelta(days=random.randint(0, 180)),
             num_func_enfermeiro=escolher(enfermeiros),
         )
         sessao.add(triagem)
@@ -363,7 +363,7 @@ def criar_atos(
 
     for _ in range(TOTAL_ATOS):
         cod_epis, hosp = escolher(episodios)
-        inicio = datetime.now() - timedelta(
+        inicio = datetime.now(timezone.utc) - timedelta(
             days=random.randint(0, 180),
             hours=random.randint(0, 23),
             minutes=random.randint(0, 59),
@@ -412,7 +412,7 @@ def criar_prescricoes(
             cod_epis=cod_epis,
             medicamento=escolher(medicamentos),
             dosagem=escolher(dosagens),
-            data_h_presc=datetime.now() - timedelta(days=random.randint(0, 180)),
+            data_h_presc=datetime.now(timezone.utc) - timedelta(days=random.randint(0, 180)),
             num_func_medico=escolher(medicos),
         )
         sessao.add(presc)
@@ -428,7 +428,7 @@ def criar_internamentos(
     escolhidos = random.sample(episodios, min(TOTAL_INTERNAMENTOS, len(episodios)))
 
     for cod_epis, _ in escolhidos:
-        entrada = datetime.now() - timedelta(days=random.randint(0, 120))
+        entrada = datetime.now(timezone.utc) - timedelta(days=random.randint(0, 120))
         saida = entrada + timedelta(days=random.randint(1, 12)) if chance(0.7) else None
 
         intern = Internamento(

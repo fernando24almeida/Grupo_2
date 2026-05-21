@@ -14,15 +14,39 @@ export const ProvedorAutenticacao = ({ children }) => {
   }
 
   useEffect(() => {
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      const papel = localStorage.getItem('role');
-      const hosp = localStorage.getItem('hospital_selecionado');
-      setUtilizador({ token, role: papel, hospital: hosp });
-    } else {
-      delete axios.defaults.headers.common['Authorization'];
-      setUtilizador(null);
-    }
+    const inicializarAutenticacao = async () => {
+      if (token) {
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        const papel = localStorage.getItem('role');
+        const hosp = localStorage.getItem('hospital_selecionado');
+        
+        try {
+          // Tentar carregar perfil completo
+          const endpoint = papel === 'UTENTE' ? '/clinical/utentes/me' : '/auth/users/me';
+          const res = await axios.get(endpoint);
+          const dadosCompletos = res.data;
+          
+          setUtilizador({ 
+            token, 
+            role: papel, 
+            hospital: hosp,
+            ...dadosCompletos,
+            // Normalizar campos entre Utente e Utilizador se necessário
+            num_func: dadosCompletos.num_func,
+            num_utente: dadosCompletos.num_utente || dadosCompletos.id_utilizador,
+            nome: dadosCompletos.nome || dadosCompletos.nome_completo
+          });
+        } catch (e) {
+          console.error('Erro ao carregar perfil inicial', e);
+          setUtilizador({ token, role: papel, hospital: hosp });
+        }
+      } else {
+        delete axios.defaults.headers.common['Authorization'];
+        setUtilizador(null);
+      }
+    };
+    
+    inicializarAutenticacao();
   }, [token]);
 
   const entrar = async (nomeUtilizador, palavraPasse) => {
@@ -47,7 +71,13 @@ export const ProvedorAutenticacao = ({ children }) => {
       }
 
       const { access_token, role } = resposta.data;
-      guardarSessao(access_token, role);
+      
+      // Carregar perfil imediatamente após login
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      const endpoint = role === 'UTENTE' ? '/clinical/utentes/me' : '/auth/users/me';
+      const resPerfil = await axios.get(endpoint);
+      
+      guardarSessao(access_token, role, resPerfil.data);
       return { sucesso: true, role };
     } catch (erro) {
       if (erro.response?.status === 403) {
@@ -64,7 +94,13 @@ export const ProvedorAutenticacao = ({ children }) => {
         mfa_code: codigo
       });
       const { access_token, role } = resposta.data;
-      guardarSessao(access_token, role);
+      
+      // Carregar perfil
+      axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+      const endpoint = role === 'UTENTE' ? '/clinical/utentes/me' : '/auth/users/me';
+      const resPerfil = await axios.get(endpoint);
+
+      guardarSessao(access_token, role, resPerfil.data);
       return { sucesso: true, role };
     } catch (erro) {
       console.error('Falha no MFA', erro);
@@ -113,12 +149,19 @@ export const ProvedorAutenticacao = ({ children }) => {
     }
   };
 
-  const guardarSessao = (access_token, role) => {
+  const guardarSessao = (access_token, role, dadosPerfil = {}) => {
     localStorage.setItem('token', access_token);
     localStorage.setItem('role', role);
     axios.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
     setToken(access_token);
-    setUtilizador({ token: access_token, role });
+    setUtilizador({ 
+      token: access_token, 
+      role, 
+      ...dadosPerfil,
+      num_func: dadosPerfil.num_func,
+      num_utente: dadosPerfil.num_utente || dadosPerfil.id_utilizador,
+      nome: dadosPerfil.nome || dadosPerfil.nome_completo
+    });
   };
 
   const definirHospital = (nomeHosp) => {

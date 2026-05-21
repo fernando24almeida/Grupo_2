@@ -4,11 +4,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .api import auth, clinical, analytics
 from .core.db import inicializar_bd, obter_sessao
 from fastapi import Depends
-from .routes.analytics_ai import router as analytics_ai_router
 
 app = FastAPI(title="API do Sistema de Gestão Clínica")
-
-app.include_router(analytics_ai_router)
 
 # Middleware para Cabeçalhos de Segurança (HSTS, CSP, etc)
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):

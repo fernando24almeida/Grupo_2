@@ -5,7 +5,7 @@ import { usarAutenticacao } from '../services/AuthContext';
 import { 
   Clipboard, HeartPulse, Thermometer, 
   Clock, CheckCircle, ArrowRight,
-  Activity, Hotel
+  Activity, Hotel, Search
 } from 'lucide-react';
 
 const ClinicalActs = () => {
@@ -16,6 +16,7 @@ const ClinicalActs = () => {
   const [queue, setQueue] = useState([]);
   const [internments, setInternments] = useState([]);
   const [selectedEpisode, setSelectedEpisode] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
   const [isHospitalizedPatient, setIsHospitalizedPatient] = useState(false);
   const [history, setHistory] = useState([]);
   const [prescriptions, setPrescriptions] = useState([]);
@@ -36,6 +37,25 @@ const ClinicalActs = () => {
   
   const [services, setServices] = useState([]);
   const [internData, setInternData] = useState({ id_servico: '', num_cama: '' });
+  const [availableBeds, setAvailableBeds] = useState([]);
+  const [loadingBeds, setLoadingBeds] = useState(false);
+
+  useEffect(() => {
+    if (internData.id_servico) {
+      setLoadingBeds(true);
+      axios.get(`/clinical/services/${internData.id_servico}/available-beds`)
+        .then(res => {
+          setAvailableBeds(res.data.camas_disponiveis);
+          setLoadingBeds(false);
+        })
+        .catch(err => {
+          console.error('Erro ao buscar camas:', err);
+          setLoadingBeds(false);
+        });
+    } else {
+      setAvailableBeds([]);
+    }
+  }, [internData.id_servico]);
 
   const handleModeChange = (mode) => {
     setActiveMode(mode);
@@ -118,7 +138,7 @@ const ClinicalActs = () => {
         ...atoData,
         cod_epis: selectedEpisode.cod_epis,
         id_hosp: selectedEpisode.id_hospital,
-        num_func: utilizador?.num_func || 1002
+        num_func: utilizador?.num_func
       });
 
       if (atoData.decisao_clinica === 'INTERNAMENTO' && !isHospitalizedPatient) {
@@ -131,7 +151,7 @@ const ClinicalActs = () => {
           id_servico: parseInt(internData.id_servico),
           num_cama: internData.num_cama ? parseInt(internData.num_cama) : null,
           data_h_entrada: new Date().toISOString(),
-          num_func_medico: utilizador?.num_func || 1002
+          num_func_medico: utilizador?.num_func
         });
         setMessage({ type: 'success', text: 'Paciente internado com sucesso!' });
       } else if (atoData.decisao_clinica === 'ALTA') {
@@ -157,7 +177,7 @@ const ClinicalActs = () => {
       await axios.post('/clinical/prescricoes', {
         ...prescData,
         cod_epis: selectedEpisode.cod_epis,
-        num_func_medico: utilizador?.num_func || 1002
+        num_func_medico: utilizador?.num_func
       });
       setPrescData({ medicamento: '', dosagem: '' });
       const res = await axios.get(`/clinical/episodes/${selectedEpisode.cod_epis}/prescriptions`);
@@ -219,9 +239,21 @@ const ClinicalActs = () => {
                 <h3>Fila de Urgência</h3>
                 <span className="count">{queue.length}</span>
               </div>
+              <div className="search-box-sidebar">
+                <Search size={16} />
+                <input 
+                  type="text" 
+                  placeholder="Pesquisar paciente..." 
+                  value={searchQuery} 
+                  onChange={(e) => setSearchQuery(e.target.value)} 
+                />
+              </div>
               <div className="queue-list">
                 {queue.length === 0 ? <p className="empty-msg">Fila vazia</p> : 
-                  queue.map((ep) => (
+                  queue.filter(ep => 
+                    ep.utente_nome.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                    ep.cod_epis.toLowerCase().includes(searchQuery.toLowerCase())
+                  ).map((ep) => (
                     <div key={ep.cod_epis} className={`queue-item priority-${ep.prioridade.toLowerCase()} ${selectedEpisode?.cod_epis === ep.cod_epis ? 'active' : ''}`} onClick={() => handleSelectPatient(ep.cod_epis, false)}>
                       <div className="patient-meta">
                         <strong>{ep.utente_nome}</strong>
@@ -239,9 +271,21 @@ const ClinicalActs = () => {
                 <h3>Pacientes Internados</h3>
                 <span className="count">{internments.length}</span>
               </div>
+              <div className="search-box-sidebar">
+                <Search size={16} />
+                <input 
+                  type="text" 
+                  placeholder="Pesquisar internado..." 
+                  value={searchQuery} 
+                  onChange={(e) => setSearchQuery(e.target.value)} 
+                />
+              </div>
               <div className="queue-list">
                 {internments.length === 0 ? <p className="empty-msg">Nenhum internado</p> : 
-                  internments.map((int) => (
+                  internments.filter(int => 
+                    int.utente_nome.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                    int.cod_epis.toLowerCase().includes(searchQuery.toLowerCase())
+                  ).map((int) => (
                     <div key={int.cod_epis} className={`queue-item intern ${selectedEpisode?.cod_epis === int.cod_epis ? 'active' : ''}`} onClick={() => handleSelectPatient(int.cod_epis, true)}>
                       <div className="patient-meta">
                         <strong>{int.utente_nome}</strong>
@@ -353,14 +397,34 @@ const ClinicalActs = () => {
                               </select>
                             </div>
                             <div className="col-md-4">
-                              <label className="form-label">Nº Cama</label>
-                              <input type="number" className="form-control" value={internData.num_cama} onChange={e => setInternData({...internData, num_cama: e.target.value})} />
+                              <label className="form-label">Cama Disponível</label>
+                              <select 
+                                className="form-select" 
+                                value={internData.num_cama} 
+                                onChange={e => setInternData({...internData, num_cama: e.target.value})}
+                                disabled={!internData.id_servico || loadingBeds}
+                                required
+                              >
+                                <option value="">{loadingBeds ? 'A carregar...' : 'Escolher...'}</option>
+                                {availableBeds.map(cama => (
+                                  <option key={cama} value={cama}>Cama {cama}</option>
+                                ))}
+                                {!loadingBeds && internData.id_servico && availableBeds.length === 0 && (
+                                  <option value="" disabled>Sem camas livres</option>
+                                )}
+                              </select>
                             </div>
                           </div>
+                          {internData.id_servico && (
+                            <p className="mt-2 small text-muted">
+                              Cada especialidade dispõe de 15 camas no total. 
+                              {availableBeds.length > 0 ? ` Estão livres ${availableBeds.length} camas.` : ' Atenção: Lotação esgotada.'}
+                            </p>
+                          )}
                         </div>
                       )}
 
-                      <button type="submit" className={`btn-submit ${activeMode === 'internamento' ? 'intern' : 'urg'}`}>
+                      <button type="submit" className={`btn ${activeMode === 'internamento' ? 'btn-danger' : 'btn-primary'} w-100 mt-4 py-3`}>
                         {atoData.decisao_clinica === 'ALTA' ? 'Confirmar Alta e Fechar Episódio' : 
                          atoData.decisao_clinica === 'INTERNAMENTO' ? 'Processar Internamento' : 
                          'Gravar Registro Clínico'}
@@ -383,10 +447,15 @@ const ClinicalActs = () => {
                       <button type="submit" className={`btn ${activeMode === 'internamento' ? 'btn-danger' : 'btn-primary'}`}>Adicionar</button>
                     </form>
                     <table className="table table-hover">
-                      <thead className="table-light"><tr><th>Medicamento</th><th>Dosagem</th><th>Data</th></tr></thead>
+                      <thead className="table-light"><tr><th>Medicamento</th><th>Dosagem</th><th>Médico</th><th>Data</th></tr></thead>
                       <tbody>
                         {prescriptions.map((p, i) => (
-                          <tr key={i}><td>{p.medicamento}</td><td>{p.dosagem}</td><td>{new Date(p.data_h_presc).toLocaleDateString()}</td></tr>
+                          <tr key={i}>
+                            <td>{p.medicamento}</td>
+                            <td>{p.dosagem}</td>
+                            <td>{p.medico_nome} ({p.medico_username})</td>
+                            <td>{new Date(p.data_h_presc).toLocaleDateString()}</td>
+                          </tr>
                         ))}
                       </tbody>
                     </table>
@@ -395,32 +464,50 @@ const ClinicalActs = () => {
 
                 {activeTab === 'history' && (
                   <div className="history-timeline">
-                    {history.map((item, i) => (
-                      <div key={i} className="history-card">
-                        <div className="history-header">
-                          <strong>Episódio: {item.episodio.cod_epis}</strong>
-                          <span className="date">{new Date(item.episodio.data_h_entrada).toLocaleDateString()}</span>
-                        </div>
-                        <div className="history-body">
-                          <div className="history-step">
-                            <span className="tag triagem">Triagem</span>
-                            <p><strong>Queixa:</strong> {item.triagem?.sintomas} | <strong>Prof:</strong> {item.triagem?.enfermeiro_nome} ({item.triagem?.enfermeiro_username})</p>
+                    {history.map((item, i) => {
+                      // Criar uma lista única de eventos para este episódio e ordenar cronologicamente
+                      const events = [
+                        { type: 'triagem', date: new Date(item.triagem?.data_h_triagem), data: item.triagem },
+                        ...(item.atos || []).map(a => ({ type: 'ato', date: new Date(a.data_h_inicio), data: a })),
+                        ...(item.prescricoes || []).map(p => ({ type: 'presc', date: new Date(p.data_h_presc), data: p }))
+                      ]
+                      .filter(e => e.date && !isNaN(e.date.getTime()))
+                      .sort((a, b) => a.date - b.date);
+
+                      return (
+                        <div key={i} className="history-card">
+                          <div className="history-header">
+                            <strong>Episódio: {item.episodio.cod_epis}</strong>
+                            <span className="date">{new Date(item.episodio.data_h_entrada).toLocaleDateString()}</span>
                           </div>
-                          {item.atos?.map((ato, idx) => (
-                            <div key={idx} className="history-step">
-                              <span className="tag ato">Ato ({ato.tipo})</span>
-                              <p><strong>Diag:</strong> {ato.diagnostico || '---'} | <strong>Prof:</strong> {ato.profissional_nome} ({ato.profissional_username})</p>
-                            </div>
-                          ))}
-                          {item.internamento && (
-                            <div className="history-step">
-                              <span className="tag intern">Internamento</span>
-                              <p><strong>Médico Resp:</strong> {item.internamento.medico_nome} ({item.internamento.medico_username})</p>
-                            </div>
-                          )}
+                          <div className="history-body">
+                            {events.map((ev, idx) => (
+                              <div key={idx} className="history-step">
+                                <span className={`tag ${ev.type}`}>{ev.type === 'presc' ? 'Prescrição' : ev.type === 'ato' ? `Ato (${ev.data.tipo})` : 'Triagem'}</span>
+                                <span className="event-time">{ev.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                
+                                {ev.type === 'triagem' && (
+                                  <p><strong>Queixa:</strong> {ev.data.sintomas} | <strong>Enfermeiro/a:</strong> {ev.data.profissional_info?.nome}</p>
+                                )}
+                                {ev.type === 'ato' && (
+                                  <p><strong>Diag:</strong> {ev.data.diagnostico || '---'} | <strong>Prof:</strong> {ev.data.profissional_nome}</p>
+                                )}
+                                {ev.type === 'presc' && (
+                                  <p><strong>Med:</strong> {ev.data.medicamento} ({ev.data.dosagem}) | <strong>Prof:</strong> {ev.data.medico_nome}</p>
+                                )}
+                              </div>
+                            ))}
+                            {item.internamento && (
+                              <div className="history-step">
+                                <span className="tag intern">Internamento</span>
+                                <span className="event-time">{new Date(item.internamento.data_h_entrada).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                <p><strong>Médico Resp:</strong> {item.internamento.medico_nome} ({item.internamento.medico_username})</p>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -454,6 +541,10 @@ const ClinicalActs = () => {
         .internamento .section-header { background: #dc2626; }
         .count { background: rgba(255,255,255,0.2); padding: 2px 10px; border-radius: 12px; font-size: 0.85rem; font-weight: bold; }
         
+        .search-box-sidebar { padding: 10px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; align-items: center; gap: 8px; }
+        .search-box-sidebar input { border: none; background: none; outline: none; font-size: 0.85rem; width: 100%; color: #475569; }
+        .search-box-sidebar svg { color: #94a3b8; }
+
         .queue-list { overflow-y: auto; flex: 1; }
         .queue-item { padding: 1.25rem; border-bottom: 1px solid #f1f5f9; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: all 0.2s; border-left: 4px solid transparent; }
         .queue-item:hover { background: #f8fafc; }
@@ -494,11 +585,6 @@ const ClinicalActs = () => {
         .decision-box.urg { background: #eff6ff; border: 1px solid #bfdbfe; }
         .decision-box.intern { background: #fef2f2; border: 1px solid #fecaca; }
         
-        .btn-submit { width: 100%; padding: 1rem; border: none; border-radius: 10px; color: white; font-weight: bold; font-size: 1.1rem; margin-top: 1.5rem; cursor: pointer; transition: 0.2s; }
-        .btn-submit.urg { background: #2563eb; }
-        .btn-submit.intern { background: #dc2626; }
-        .btn-submit:hover { opacity: 0.9; transform: translateY(-1px); }
-
         .empty-workspace { height: 500px; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #94a3b8; }
         
         .history-card { background: white; border-radius: 10px; margin-bottom: 1rem; border: 1px solid #e2e8f0; overflow: hidden; }

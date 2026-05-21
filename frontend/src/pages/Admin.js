@@ -51,6 +51,7 @@ const Admin = () => {
   // Estados para Edição e Visualização
   const [editingItem, setEditingItem] = useState(null);
   const [journeyEpisode, setJourneyEpisode] = useState(null);
+  const [historyUtente, setHistoryUtente] = useState(null);
   const [loading, setLoading] = useState(false);
   
   const [mensagem, setMensagem] = useState({ tipo: '', texto: '' });
@@ -237,7 +238,11 @@ const Admin = () => {
       setEditingItem(null);
       fetchData();
     } catch (erro) {
-      setMensagem({ tipo: 'error', texto: 'Erro ao atualizar registo.' });
+      const errorMsg = erro.response?.data?.detail || 'Erro ao atualizar registo.';
+      if (erro.response?.status === 400) {
+        alert(`AVISO: ${errorMsg}`);
+      }
+      setMensagem({ tipo: 'error', texto: errorMsg });
     }
   };
 
@@ -254,7 +259,11 @@ const Admin = () => {
       setMensagem({ tipo: 'success', texto: 'Registo eliminado com sucesso!' });
       fetchData();
     } catch (erro) {
-      setMensagem({ tipo: 'error', texto: 'Erro ao eliminar registo.' });
+      const errorMsg = erro.response?.data?.detail || 'Erro ao eliminar registo.';
+      if (erro.response?.status === 400) {
+        alert(`NÃO É POSSÍVEL ELIMINAR:\n\n${errorMsg}`);
+      }
+      setMensagem({ tipo: 'error', texto: errorMsg });
     }
   };
 
@@ -263,7 +272,18 @@ const Admin = () => {
       const res = await axios.get(`/clinical/episodes/${codEpis}/journey`);
       setJourneyEpisode(res.data);
     } catch (erro) {
-      setMensagem({ tipo: 'error', texto: 'Erro ao carregar percurso.' });
+      const msg = erro.response?.data?.detail || 'Erro ao carregar percurso.';
+      setMensagem({ tipo: 'error', texto: msg });
+    }
+  };
+
+  const verHistoricoUtente = async (numUtente) => {
+    try {
+      const res = await axios.get(`/clinical/utentes/${numUtente}/history`);
+      setHistoryUtente(res.data);
+    } catch (erro) {
+      const msg = erro.response?.data?.detail || 'Erro ao carregar histórico do utente.';
+      setMensagem({ tipo: 'error', texto: msg });
     }
   };
 
@@ -494,6 +514,7 @@ const Admin = () => {
                     <h4><Activity size={18}/> Estado</h4>
                     <p><strong>Entrada:</strong> {new Date(journeyEpisode.episodio.data_h_entrada).toLocaleString()}</p>
                     <p><strong>Status:</strong> {journeyEpisode.episodio.data_h_saida ? 'Alta' : 'Ativo'}</p>
+                    <p><strong>Admissão:</strong> {journeyEpisode.episodio.profissional_info?.nome} ({journeyEpisode.episodio.profissional_info?.username} | ID: {journeyEpisode.episodio.profissional_info?.num_func})</p>
                   </div>
                 </div>
 
@@ -504,23 +525,35 @@ const Admin = () => {
                       <h5>Triagem</h5>
                       {journeyEpisode.triagem ? (
                         <>
-                          <span className={`priority-tag ${journeyEpisode.triagem.prioridade.toLowerCase()}`}>{journeyEpisode.triagem.prioridade}</span>
+                          <span className={`priority-tag ${journeyEpisode.triagem.prioridade?.toLowerCase() || 'gray'}`}>{journeyEpisode.triagem.prioridade}</span>
                           <p><strong>Sintomas:</strong> {journeyEpisode.triagem.sintomas}</p>
-                          <p><strong>Profissional:</strong> {journeyEpisode.triagem.enfermeiro_nome || '---'} ({journeyEpisode.triagem.num_func_enfermeiro})</p>
+                          <p><strong>Profissional:</strong> {journeyEpisode.triagem.profissional_info?.nome} ({journeyEpisode.triagem.profissional_info?.username} | ID: {journeyEpisode.triagem.profissional_info?.num_func})</p>
                         </>
                       ) : <p>Não realizada.</p>}
                     </div>
                   </div>
 
-                  {journeyEpisode.atos.map((ato, i) => (
+                  {journeyEpisode.atos && journeyEpisode.atos.map((ato, i) => (
                     <div className="timeline-item" key={i}>
                       <div className="timeline-icon"><Briefcase size={16} /></div>
                       <div className="timeline-content">
                         <h5>Ato: {ato.tipo}</h5>
                         <p><strong>Diagnóstico:</strong> {ato.diagnostico || '---'}</p>
                         <p><strong>Decisão:</strong> {ato.decisao_clinica || '---'}</p>
-                        <p><strong>Profissional:</strong> {ato.profissional_nome || '---'} ({ato.num_func})</p>
-                        <small>{new Date(ato.data_h_inicio).toLocaleString()}</small>
+                        <p><strong>Profissional:</strong> {ato.profissional_info?.nome} ({ato.profissional_info?.username} | ID: {ato.profissional_info?.num_func})</p>
+                        <small>{ato.data_h_inicio ? new Date(ato.data_h_inicio).toLocaleString() : '---'}</small>
+                      </div>
+                    </div>
+                  ))}
+
+                  {journeyEpisode.prescricoes && journeyEpisode.prescricoes.map((p, i) => (
+                    <div className="timeline-item" key={i}>
+                      <div className="timeline-icon"><FileText size={16} /></div>
+                      <div className="timeline-content">
+                        <h5>Prescrição Médica</h5>
+                        <p><strong>Medicação:</strong> {p.medicamento} ({p.dosagem})</p>
+                        <p><strong>Médico:</strong> {p.profissional_info?.nome} ({p.profissional_info?.username} | ID: {p.profissional_info?.num_func})</p>
+                        <small>{p.data_h_presc ? new Date(p.data_h_presc).toLocaleString() : '---'}</small>
                       </div>
                     </div>
                   ))}
@@ -530,15 +563,104 @@ const Admin = () => {
                       <div className="timeline-icon"><Hotel size={16} /></div>
                       <div className="timeline-content">
                         <h5>Internamento</h5>
-                        <p><strong>Entrada:</strong> {new Date(journeyEpisode.internamento.data_h_entrada).toLocaleString()}</p>
+                        <p><strong>Entrada:</strong> {journeyEpisode.internamento.data_h_entrada ? new Date(journeyEpisode.internamento.data_h_entrada).toLocaleString() : '---'}</p>
                         <p><strong>Cama:</strong> {journeyEpisode.internamento.num_cama || 'N/A'}</p>
-                        <p><strong>Médico Responsável:</strong> {journeyEpisode.internamento.medico_nome || '---'} ({journeyEpisode.internamento.num_func_medico})</p>
+                        <p><strong>Médico Responsável:</strong> {journeyEpisode.internamento.profissional_info?.nome} ({journeyEpisode.internamento.profissional_info?.username} | ID: {journeyEpisode.internamento.profissional_info?.num_func})</p>
                         {journeyEpisode.internamento.data_h_saida && (
                           <p className="text-success"><strong>Alta:</strong> {new Date(journeyEpisode.internamento.data_h_saida).toLocaleString()}</p>
                         )}
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE HISTÓRICO COMPLETO DO UTENTE */}
+        {historyUtente && (
+          <div className="admin-modal-overlay">
+            <div className="admin-modal-content large">
+              <div className="modal-header">
+                <h3>Histórico Clínico: {historyUtente[0]?.utente?.nome || 'Utente'}</h3>
+                <button className="close-btn" onClick={() => setHistoryUtente(null)}><X size={24}/></button>
+              </div>
+              <div className="journey-body">
+                <div className="admin-history-list">
+                  {historyUtente.map((item, i) => {
+                    const events = [
+                      { type: 'triagem', date: new Date(item.triagem?.data_h_triagem), data: item.triagem },
+                      ...(item.atos || []).map(a => ({ type: 'ato', date: new Date(a.data_h_inicio), data: a })),
+                      ...(item.prescricoes || []).map(p => ({ type: 'presc', date: new Date(p.data_h_presc), data: p }))
+                    ]
+                    .filter(e => e.date && !isNaN(e.date.getTime()))
+                    .sort((a, b) => a.date - b.date);
+
+                    return (
+                      <div key={i} className="history-episode-card mb-4">
+                        <div className="history-episode-header">
+                          <div className="d-flex align-items-center gap-3">
+                            <span className="badge-episodio">EPISÓDIO: {item.episodio.cod_epis}</span>
+                            <span className="date-episodio">{new Date(item.episodio.data_h_entrada).toLocaleDateString()}</span>
+                          </div>
+                          <span className={`status-tag ${item.episodio.data_h_saida ? 'closed' : 'open'}`}>
+                            {item.episodio.data_h_saida ? 'ARQUIVADO' : 'EM CURSO'}
+                          </span>
+                        </div>
+                        
+                        <div className="timeline-unified">
+                          {events.map((ev, idx) => (
+                            <div key={idx} className="timeline-step">
+                              <div className="timeline-marker"></div>
+                              <div className="timeline-info">
+                                <div className="d-flex align-items-center gap-2 mb-1">
+                                  <span className={`badge-type ${ev.type}`}>{ev.type.toUpperCase()}</span>
+                                  <span className="time-marker">{ev.date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                </div>
+                                {ev.type === 'triagem' && (
+                                  <div className="step-details">
+                                    <p><strong>Prioridade:</strong> <span className={`priority-mini ${ev.data.prioridade?.toLowerCase()}`}>{ev.data.prioridade}</span></p>
+                                    <p><strong>Sintomas:</strong> {ev.data.sintomas}</p>
+                                    <p><strong>Enfermeiro/a:</strong> {ev.data.profissional_info?.nome}</p>
+                                  </div>
+                                )}
+                                {ev.type === 'ato' && (
+                                  <div className="step-details">
+                                    <p><strong>Tipo:</strong> {ev.data.tipo}</p>
+                                    <p><strong>Diagnóstico:</strong> {ev.data.diagnostico || '---'}</p>
+                                    <p><strong>Profissional:</strong> {ev.data.profissional_info?.nome}</p>
+                                  </div>
+                                )}
+                                {ev.type === 'presc' && (
+                                  <div className="step-details">
+                                    <p><strong>Medicação:</strong> {ev.data.medicamento} ({ev.data.dosagem})</p>
+                                    <p><strong>Médico:</strong> {ev.data.profissional_info?.nome}</p>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                          {item.internamento && (
+                            <div className="timeline-step special-step">
+                              <div className="timeline-marker red"></div>
+                              <div className="timeline-info">
+                                <div className="d-flex align-items-center gap-2 mb-1">
+                                  <span className="badge-type intern">INTERNAMENTO</span>
+                                  <span className="time-marker">{new Date(item.internamento.data_h_entrada).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                                </div>
+                                <div className="step-details">
+                                  <p><strong>Cama:</strong> {item.internamento.num_cama || 'N/A'}</p>
+                                  <p><strong>Médico Resp:</strong> {item.internamento.profissional_info?.nome}</p>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {historyUtente.length === 0 && <p className="text-center p-5 text-muted">Este utente ainda não possui histórico de episódios.</p>}
                 </div>
               </div>
             </div>
@@ -562,7 +684,7 @@ const Admin = () => {
                         <tr key={ep.cod_epis}>
                           <td><strong>{ep.cod_epis}</strong></td>
                           <td>{new Date(ep.data_h_entrada).toLocaleString()}</td>
-                          <td>{ep.rececionista_nome}</td>
+                          <td>{ep.profissional_info?.nome || ep.rececionista_nome}</td>
                           <td className="actions">
                             <button className="btn-icon primary" onClick={() => verPercursoEpisodio(ep.cod_epis)} title="Ver Percurso"><Eye size={16}/></button>
                             <button className="btn-icon danger" onClick={() => handleDelete('episode', ep.cod_epis)}><Trash2 size={16}/></button>
@@ -589,7 +711,10 @@ const Admin = () => {
                   <table className="admin-table">
                     <thead><tr><th>Código</th><th>Utente</th><th>Entrada</th><th>Ações</th></tr></thead>
                     <tbody>
-                      {episodiosAtivos.filter(e => e.cod_epis.includes(filtros.episode)).map(e => (
+                      {episodiosAtivos.filter(e => 
+                        e.cod_epis.toLowerCase().includes(filtros.episode.toLowerCase()) || 
+                        e.id_utente.toString().includes(filtros.episode)
+                      ).map(e => (
                         <tr key={e.cod_epis}>
                           <td><strong>{e.cod_epis}</strong></td>
                           <td>ID: {e.id_utente}</td>
@@ -620,6 +745,7 @@ const Admin = () => {
                           <td><span className="badge-cama">{i.num_cama || '---'}</span></td>
                           <td>{i.cod_epis}</td>
                           <td>{i.utente_nome}</td>
+                          <td>{i.medico_responsavel}</td>
                           <td>{new Date(i.data_h_entrada).toLocaleString()}</td>
                           <td className="actions">
                             <button className="btn-icon primary" onClick={() => verPercursoEpisodio(i.cod_epis)} title="Ver Percurso"><Eye size={16}/></button>
@@ -645,11 +771,14 @@ const Admin = () => {
                 <Search size={18} />
                 <input type="text" placeholder="Pesquisar no arquivo (Cód. Episódio)..." value={filtros.episode} onChange={e => setFiltros({...filtros, episode: e.target.value})} />
               </div>
-              <div className="card-body p-0">
+                <div className="card-body p-0">
                 <table className="admin-table">
                   <thead><tr><th>Código</th><th>Utente</th><th>Entrada</th><th>Saída (Alta)</th><th>Ações</th></tr></thead>
                   <tbody>
-                    {episodiosArquivados.filter(e => e.cod_epis.includes(filtros.episode)).map(e => (
+                    {episodiosArquivados.filter(e => 
+                      e.cod_epis.toLowerCase().includes(filtros.episode.toLowerCase()) ||
+                      e.id_utente.toString().includes(filtros.episode)
+                    ).map(e => (
                       <tr key={e.cod_epis}>
                         <td><strong>{e.cod_epis}</strong></td>
                         <td>ID: {e.id_utente}</td>
@@ -684,6 +813,13 @@ const Admin = () => {
                       <td>{u.email || <span className="text-danger">Sem E-mail</span>}</td>
                       <td><span className={`status-pill ${u.ativo ? 'active' : 'pending'}`}>{u.ativo ? 'Ativo' : 'Pendente'}</span></td>
                       <td className="actions">
+                        <button 
+                          className="btn-icon primary" 
+                          onClick={() => verHistoricoUtente(u.num_utente)}
+                          title="Ver Histórico Clínico"
+                        >
+                          <History size={16}/>
+                        </button>
                         <button 
                           className="btn-icon primary" 
                           onClick={() => setEditingItem({ type: 'utente', data: { ...u } })}
@@ -895,16 +1031,21 @@ const Admin = () => {
         .admin-table th { background: #f8fafc; padding: 12px 20px; text-align: left; font-size: 0.75rem; color: #64748b; border-bottom: 1px solid #e2e8f0; }
         .admin-table td { padding: 15px 20px; border-bottom: 1px solid #f1f5f9; font-size: 0.9rem; }
         .actions { display: flex; gap: 8px; }
-        .btn-icon { width: 32px; height: 32px; border-radius: 6px; border: 1px solid #e2e8f0; background: white; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #64748b; transition: 0.2s; }
-        .btn-icon.success:hover { background: #dcfce7; color: #166534; border-color: #166534; }
-        .btn-icon.primary:hover { background: #dbeafe; color: #1e40af; border-color: #1e40af; }
-        .btn-icon.warning:hover { background: #fef3c7; color: #92400e; border-color: #92400e; }
-        .btn-icon.danger:hover { background: #fee2e2; color: #dc2626; border-color: #dc2626; }
+        
         .status-pill { padding: 4px 10px; border-radius: 20px; font-size: 0.75rem; font-weight: 600; }
         .status-pill.active { background: #dcfce7; color: #166534; }
         .badge-cama { background: #f1f5f9; padding: 2px 8px; border-radius: 6px; font-weight: bold; color: #475569; }
-        .admin-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 1000; }
-        .admin-modal-content.large { width: 900px; background: white; border-radius: 15px; max-height: 90vh; overflow-y: auto; padding: 30px; }
+        .admin-modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(2px); }
+        .admin-modal-content { background: white; border-radius: 16px; width: 550px; max-height: 90vh; overflow-y: auto; padding: 30px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04); animation: modalEnter 0.3s ease-out; }
+        .admin-modal-content.large { width: 1000px; }
+        @keyframes modalEnter { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+        
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; padding-bottom: 15px; border-bottom: 1px solid #f1f5f9; }
+        .modal-header h3 { margin: 0; font-size: 1.25rem; color: #1e293b; }
+        .close-btn { width: 36px; height: 36px; border-radius: 50%; border: none; background: #f8fafc; color: #64748b; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.2s; }
+        .close-btn:hover { background: #fee2e2; color: #ef4444; transform: rotate(90deg); }
+        
+        .journey-body { padding-top: 10px; }
         .journey-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 30px; }
         .summary-card { background: #f8fafc; padding: 15px; border-radius: 10px; border: 1px solid #e2e8f0; }
         .timeline { padding-left: 20px; border-left: 2px solid #e2e8f0; margin-left: 10px; }
@@ -913,6 +1054,42 @@ const Admin = () => {
         .priority-tag { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; font-weight: bold; }
         .priority-tag.vermelho { background: #dc3545; color: white; }
         .priority-tag.laranja { background: #fd7e14; color: white; }
+
+        /* Estilos Histórico Completo Utente */
+        .admin-history-list { display: flex; flex-direction: column; gap: 20px; }
+        .history-episode-card { border: 1px solid #e2e8f0; border-radius: 12px; overflow: hidden; background: white; }
+        .history-episode-header { background: #f8fafc; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #e2e8f0; }
+        .badge-episodio { background: #2563eb; color: white; padding: 4px 10px; border-radius: 6px; font-size: 0.75rem; font-weight: bold; }
+        .date-episodio { color: #64748b; font-size: 0.85rem; font-weight: 500; }
+        .status-tag { padding: 3px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; }
+        .status-tag.open { background: #dcfce7; color: #166534; }
+        .status-tag.closed { background: #f1f5f9; color: #475569; }
+
+        .timeline-unified { padding: 20px; position: relative; }
+        .timeline-step { display: flex; gap: 20px; margin-bottom: 20px; position: relative; }
+        .timeline-step:last-child { margin-bottom: 0; }
+        .timeline-step::before { content: ""; position: absolute; left: 7px; top: 20px; bottom: -20px; width: 2px; background: #f1f5f9; }
+        .timeline-step:last-child::before { display: none; }
+        
+        .timeline-marker { width: 16px; height: 16px; border-radius: 50%; background: white; border: 3px solid #cbd5e1; z-index: 1; flex-shrink: 0; margin-top: 4px; }
+        .timeline-marker.red { border-color: #ef4444; }
+        
+        .timeline-info { flex: 1; }
+        .badge-type { font-size: 0.65rem; padding: 2px 6px; border-radius: 4px; font-weight: bold; }
+        .badge-type.triagem { background: #e0f2fe; color: #0369a1; }
+        .badge-type.ato { background: #f1f5f9; color: #475569; }
+        .badge-type.presc { background: #fef3c7; color: #92400e; }
+        .badge-type.intern { background: #fee2e2; color: #991b1b; }
+        
+        .time-marker { font-size: 0.75rem; color: #94a3b8; font-weight: 600; }
+        .step-details { background: #fcfcfd; border-radius: 8px; padding: 10px; margin-top: 5px; border: 1px solid #f1f5f9; }
+        .step-details p { margin: 2px 0; font-size: 0.85rem; color: #1e293b; }
+        .priority-mini { font-size: 0.7rem; font-weight: bold; text-transform: uppercase; }
+        .priority-mini.vermelho { color: #dc3545; }
+        .priority-mini.laranja { color: #fd7e14; }
+        .priority-mini.amarelo { color: #d97706; }
+        .priority-mini.verde { color: #16a34a; }
+        .priority-mini.azul { color: #2563eb; }
       `}</style>
     </div>
   );

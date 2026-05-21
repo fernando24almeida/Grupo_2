@@ -142,6 +142,10 @@ const Dashboard = () => {
                     <span>{selectedJourney.episodio.id_hospital}</span>
                   </div>
                   <div className="summary-item">
+                    <label>Admitido por:</label>
+                    <span>{selectedJourney.episodio.profissional_info?.nome || '---'} ({selectedJourney.episodio.profissional_info?.username || '---'} | ID: {selectedJourney.episodio.profissional_info?.num_func || '---'})</span>
+                  </div>
+                  <div className="summary-item">
                     <label>Sintomas Iniciais:</label>
                     <p>{selectedJourney.episodio.sintomas || 'Não registados'}</p>
                   </div>
@@ -159,6 +163,7 @@ const Dashboard = () => {
                       <div className="timeline-content">
                         <h5>Triagem ({selectedJourney.triagem.prioridade})</h5>
                         <p><strong>Data:</strong> {new Date(selectedJourney.triagem.data_h_triagem).toLocaleString()}</p>
+                        <p><strong>Profissional:</strong> {selectedJourney.triagem.profissional_info?.nome} ({selectedJourney.triagem.profissional_info?.username} | ID: {selectedJourney.triagem.profissional_info?.num_func})</p>
                         <p><strong>Sintomas:</strong> {selectedJourney.triagem.sintomas}</p>
                         <p><strong>Sinais Vitais:</strong> Temp: {selectedJourney.triagem.temperatura}ºC | TA: {selectedJourney.triagem.tensao_arterial}</p>
                       </div>
@@ -173,6 +178,7 @@ const Dashboard = () => {
                         <h5>Ato Clínico: {ato.tipo}</h5>
                         <p><strong>Início:</strong> {new Date(ato.data_h_inicio).toLocaleString()}</p>
                         {ato.data_h_fim && <p><strong>Fim:</strong> {new Date(ato.data_h_fim).toLocaleString()}</p>}
+                        <p><strong>Profissional:</strong> {ato.profissional_info?.nome} ({ato.profissional_info?.username} | ID: {ato.profissional_info?.num_func})</p>
                         <p><strong>Decisão:</strong> {ato.decisao_clinica}</p>
                       </div>
                     </div>
@@ -185,6 +191,7 @@ const Dashboard = () => {
                       <div className="timeline-content">
                         <h5>Prescrição Médica</h5>
                         <p><strong>Data:</strong> {new Date(p.data_h_presc).toLocaleString()}</p>
+                        <p><strong>Médico:</strong> {p.profissional_info?.nome} ({p.profissional_info?.username} | ID: {p.profissional_info?.num_func})</p>
                         <p><strong>Medicação:</strong> {p.medicamento} ({p.dosagem})</p>
                       </div>
                     </div>
@@ -197,6 +204,7 @@ const Dashboard = () => {
                       <div className="timeline-content">
                         <h5>Internamento</h5>
                         <p><strong>Entrada:</strong> {new Date(selectedJourney.internamento.data_h_entrada).toLocaleString()}</p>
+                        <p><strong>Médico Responsável:</strong> {selectedJourney.internamento.profissional_info?.nome} ({selectedJourney.internamento.profissional_info?.username} | ID: {selectedJourney.internamento.profissional_info?.num_func})</p>
                         <p><strong>Cama:</strong> {selectedJourney.internamento.num_cama}</p>
                       </div>
                     </div>

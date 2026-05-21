@@ -10,19 +10,13 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 
-# Configuração robusta de imports para o backend
-# Adiciona o diretório 'backend' ao sys.path se necessário
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-if parent_dir not in sys.path:
-    sys.path.append(parent_dir)
+# Adicionar o diretório raiz ao path para importar as configurações do backend
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    # Tenta importar usando o caminho absoluto do projeto
-    from app.core.config import configuracoes
+    from backend.app.core.config import configuracoes
     DATABASE_URL = configuracoes.DATABASE_URL
 except ImportError:
-    # Fallback para desenvolvimento local
     DATABASE_URL = "postgresql://postgres:admin@127.0.0.1:5432/urgencias_g2"
 
 @dataclass
@@ -121,11 +115,7 @@ def treinar_modelo(df_modelo: pd.DataFrame) -> AnalyticsResult:
     y = df_modelo["afluencia"]
 
     # Divisão treino/teste para métricas reais
-    # Se houver dados insuficientes para o split (ex: apenas 1 linha em y_test), usamos todo o conjunto
-    if len(df_modelo) < 10:
-        X_train, X_test, y_train, y_test = X, X, y, y
-    else:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
     modelo = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
     modelo.fit(X_train, y_train)

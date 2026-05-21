@@ -6,7 +6,7 @@ import random
 import re
 import uuid
 import string
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, Request, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select, text
@@ -78,6 +78,8 @@ class AtualizarUtilizador(BaseModel):
     palavra_passe: Optional[str] = None
     id_role: Optional[int] = None # Apenas Admin pode mudar
     ativo: Optional[bool] = None # Apenas Admin pode mudar
+    estagiario: Optional[str] = None
+    especialidade: Optional[str] = None
 
 class LerUtilizador(BaseModel):
     id_utilizador: int
@@ -132,10 +134,33 @@ def entrar(request: Request, dados_form: OAuth2PasswordRequestForm = Depends(), 
         if utilizador.mfa_ativo:
             return {"mfa_required": True, "mfa_setup_complete": True, "username": utilizador.nome_utilizador}
         else:
-            papel = sessao.get(PapelUtilizador, utilizador.id_role)
-            role_name = papel.nome if papel else "USER"
-            token_acesso = criar_token_acesso(dados={"sub": utilizador.nome_utilizador, "role": role_name})
-            return {"access_token": token_acesso, "token_type": "bearer", "role": role_name}
+            # MFA Obrigatório para todos os funcionários (Staff)
+            if not utilizador.mfa_secret:
+                utilizador.mfa_secret = pyotp.random_base32()
+                sessao.add(utilizador)
+                sessao.commit()
+            
+            # Gerar QR Code para o setup inicial
+            totp = pyotp.TOTP(utilizador.mfa_secret)
+            provisioning_uri = totp.provisioning_uri(
+                name=utilizador.email, 
+                issuer_name="Urgências G2"
+            )
+            
+            # Criar imagem do QR Code em base64 para o frontend
+            img = qrcode.make(provisioning_uri)
+            buffered = io.BytesIO()
+            img.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            
+            return {
+                "mfa_required": True,
+                "mfa_setup_complete": False,
+                "username": utilizador.nome_utilizador,
+                "qr_code_url": provisioning_uri,
+                "qr_code_image": f"data:image/png;base64,{img_str}",
+                "secret": utilizador.mfa_secret
+            }
 
     # Validar credenciais para Utente
     if utente:
@@ -188,7 +213,7 @@ def ativar_conta(dados: ValidarCodigo, sessao: Session = Depends(obter_sessao)):
         EmailValidation.email == email_limpo,
         EmailValidation.codigo == dados.codigo,
         EmailValidation.utilizado == False,
-        EmailValidation.expira_em > datetime.now()
+        EmailValidation.expira_em > datetime.now(timezone.utc)
     )).first()
     
     if not validacao:
@@ -266,7 +291,7 @@ async def recuperar_password(dados: RecuperarConta, background_tasks: Background
                 validacao = EmailValidation(
                     email=utente.email, 
                     codigo=codigo_ativacao, 
-                    expira_em=datetime.now() + timedelta(hours=24)
+                    expira_em=datetime.now(timezone.utc) + timedelta(hours=24)
                 )
                 sessao.add(validacao)
                 sessao.commit()
@@ -299,7 +324,7 @@ async def recuperar_password(dados: RecuperarConta, background_tasks: Background
         reset = PasswordReset(
             email=email_limpo,
             token=token,
-            expira_em=datetime.now() + timedelta(hours=1)
+            expira_em=datetime.now(timezone.utc) + timedelta(hours=1)
         )
         sessao.add(reset)
         sessao.commit()
@@ -317,7 +342,7 @@ async def recuperar_password(dados: RecuperarConta, background_tasks: Background
             utente.password_hash = obter_hash_palavra_passe(pin_temporario)
             utente.primeiro_acesso = True
             sessao.add(utente)
-            validacao = EmailValidation(email=email_limpo, codigo=codigo_ativacao, expira_em=datetime.now() + timedelta(hours=24))
+            validacao = EmailValidation(email=email_limpo, codigo=codigo_ativacao, expira_em=datetime.now(timezone.utc) + timedelta(hours=24))
             sessao.add(validacao)
             sessao.commit()
             background_tasks.add_task(enviar_email_ativacao, email_limpo, utente.nome, f"{codigo_ativacao} (PIN Mobile: {pin_temporario})")
@@ -337,7 +362,7 @@ def confirmar_redefinicao_password(dados: RedefinirPassword, sessao: Session = D
     reset = sessao.exec(select(PasswordReset).where(
         PasswordReset.token == dados.token,
         PasswordReset.utilizado == False,
-        PasswordReset.expira_em > datetime.now()
+        PasswordReset.expira_em > datetime.now(timezone.utc)
     )).first()
     
     if not reset:
@@ -393,7 +418,7 @@ def criar_utilizador(request: Request, utilizador_in: CriarUtilizador, backgroun
     try:
         sessao.add(db_utilizador)
         codigo = f"{random.randint(100000, 999999)}"
-        validacao = EmailValidation(email=email_limpo, codigo=codigo, expira_em=datetime.now() + timedelta(hours=24))
+        validacao = EmailValidation(email=email_limpo, codigo=codigo, expira_em=datetime.now(timezone.utc) + timedelta(hours=24))
         sessao.add(validacao)
         sessao.commit()
         
@@ -439,9 +464,18 @@ def atualizar_proprio_perfil(dados: AtualizarUtilizador, utilizador_atual: Utili
         raise HTTPException(status_code=403, detail="Não tem permissão para alterar o seu cargo ou estado da conta.")
     
     # Atualizar campos permitidos
-    if dados.nome_completo: utilizador_atual.nome_completo = dados.nome_completo
-    if dados.email: utilizador_atual.email = dados.email.lower().strip()
-    if dados.telemovel: utilizador_atual.telemovel = dados.telemovel
+    if dados.nome_completo is not None: utilizador_atual.nome_completo = dados.nome_completo
+    if dados.email is not None:
+        novo_email = dados.email.lower().strip()
+        # Só verificar se o email mudou
+        if novo_email != utilizador_atual.email.lower().strip():
+            # Verificar se o email já existe para outro utilizador (Profissional)
+            statement = select(Utilizador).where(Utilizador.email == novo_email)
+            existente = sessao.exec(statement).first()
+            if existente:
+                raise HTTPException(status_code=400, detail=f"O email '{novo_email}' já está em uso por outra conta de profissional. Um utilizador pode ser utente com o mesmo email, mas as contas de staff devem ter emails únicos.")
+            utilizador_atual.email = novo_email
+    if dados.telemovel is not None: utilizador_atual.telemovel = dados.telemovel
 
     # Se for médico, permitir atualizar dados profissionais
     if utilizador_atual.num_func:
@@ -451,7 +485,7 @@ def atualizar_proprio_perfil(dados: AtualizarUtilizador, utilizador_atual: Utili
             if dados.especialidade is not None: medico.especialidade = dados.especialidade
             sessao.add(medico)
 
-    if dados.palavra_passe:
+    if dados.palavra_passe is not None and dados.palavra_passe != "":
         try:
             CriarUtilizador.validar_password(dados.palavra_passe)
         except ValueError as e:
@@ -470,12 +504,21 @@ def atualizar_utilizador_admin(id_utilizador: int, dados: AtualizarUtilizador, s
         raise HTTPException(status_code=404, detail="Utilizador não encontrado")
 
     # Admin pode editar campos adicionais
-    if dados.nome_completo: utilizador.nome_completo = dados.nome_completo
-    if dados.email: utilizador.email = dados.email.lower().strip()
-    if dados.telemovel: utilizador.telemovel = dados.telemovel
-    if dados.id_role: utilizador.id_role = dados.id_role
+    if dados.nome_completo is not None: utilizador.nome_completo = dados.nome_completo
+    if dados.email is not None:
+        novo_email = dados.email.lower().strip()
+        # Só verificar se o email mudou
+        if novo_email != utilizador.email.lower().strip():
+            # Verificar se o email já existe para outro utilizador (Profissional)
+            statement = select(Utilizador).where(Utilizador.email == novo_email)
+            existente = sessao.exec(statement).first()
+            if existente:
+                raise HTTPException(status_code=400, detail=f"O email '{novo_email}' já está em uso por outra conta de profissional. Um utilizador pode ser utente com o mesmo email, mas as contas de staff devem ter emails únicos.")
+            utilizador.email = novo_email
+    if dados.telemovel is not None: utilizador.telemovel = dados.telemovel
+    if dados.id_role is not None: utilizador.id_role = dados.id_role
     if dados.ativo is not None: utilizador.ativo = dados.ativo
-    if dados.palavra_passe:
+    if dados.palavra_passe is not None and dados.palavra_passe != "":
         try:
             CriarUtilizador.validar_password(dados.palavra_passe)
         except ValueError as e:
@@ -486,8 +529,8 @@ def atualizar_utilizador_admin(id_utilizador: int, dados: AtualizarUtilizador, s
     if utilizador.num_func:
         medico = sessao.get(Medico, utilizador.num_func)
         if medico:
-            if dados.estagiario: medico.estagiario = dados.estagiario
-            if dados.especialidade: medico.especialidade = dados.especialidade
+            if dados.estagiario is not None: medico.estagiario = dados.estagiario
+            if dados.especialidade is not None: medico.especialidade = dados.especialidade
             sessao.add(medico)
 
     sessao.add(utilizador)
@@ -509,8 +552,35 @@ def eliminar_utilizador(id_utilizador: int, sessao: Session = Depends(obter_sess
     if not utilizador:
         raise HTTPException(status_code=404, detail="Utilizador não encontrado")
 
-    # Limpar dependências que impedem a remoção (Foreign Keys)
-    sessao.execute(text("DELETE FROM audit_log WHERE id_utilizador = :uid"), {"uid": id_utilizador})
+    # VERIFICAÇÃO DE USO: Impedir remoção se houver histórico
+    # 1. Verificar logs de auditoria (ações realizadas pelo utilizador)
+    log_existente = sessao.exec(select(AuditLog).where(AuditLog.id_utilizador == id_utilizador)).first()
+    if log_existente:
+        raise HTTPException(
+            status_code=400, 
+            detail="Não é possível eliminar este utilizador porque já existem registos de auditoria interligados às suas ações. Por questões de integridade e estabilidade da base de dados, a conta deve ser mantida (pode optar por suspendê-la)."
+        )
+
+    # 2. Verificar se está vinculado a episódios (receção)
+    episodio_vinculado = sessao.exec(select(EpisodioUrgencia).where(EpisodioUrgencia.id_utilizador_rececao == id_utilizador)).first()
+    if episodio_vinculado:
+        raise HTTPException(
+            status_code=400,
+            detail="Não é possível eliminar este utilizador porque está interligado a episódios de urgência no sistema. Para garantir a estabilidade dos dados, o registo não pode ser removido."
+        )
+
+    # 3. Se tiver número de funcionário, verificar se realizou atos clínicos
+    if utilizador.num_func:
+        # Verificar em Triagens, Atos, etc.
+        uso_clinico = sessao.exec(select(Triagem).where(Triagem.num_func_enfermeiro == utilizador.num_func)).first() or \
+                     sessao.exec(select(Ato).where(Ato.num_func == utilizador.num_func)).first()
+        if uso_clinico:
+            raise HTTPException(
+                status_code=400,
+                detail="Este utilizador possui histórico de atos clínicos registados e está usado no sistema. Não pode ser eliminado por motivos de segurança e consistência de dados."
+            )
+
+    # Se passar as verificações, podemos tentar apagar (registos temporários de ativação)
     sessao.execute(text("DELETE FROM email_validation WHERE email = :email"), {"email": utilizador.email})
     sessao.execute(text("DELETE FROM password_reset WHERE email = :email"), {"email": utilizador.email})
 
@@ -550,7 +620,7 @@ async def reenviar_ativacao_utilizador(id_utilizador: int, background_tasks: Bac
         validacao = EmailValidation(
             email=utilizador.email, 
             codigo=codigo, 
-            expira_em=datetime.now() + timedelta(hours=24)
+            expira_em=datetime.now(timezone.utc) + timedelta(hours=24)
         )
         sessao.add(validacao)
         sessao.commit()
