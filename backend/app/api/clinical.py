@@ -1157,6 +1157,10 @@ def registar_triagem_manchester(dados: CriarTriagem, sessao: Session = Depends(o
 
 @router.get("/utentes/{num_utente}/history")
 def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sessao), utilizador = Depends(obter_utilizador_atual)):
+    # 0. Info do Utente
+    db_utente = sessao.get(Utente, num_utente)
+    utente_dict = db_utente.dict() if db_utente else None
+
     # 1. Episódios com Rececionista
     query = select(EpisodioUrgencia, Utilizador).join(
         Utilizador, EpisodioUrgencia.id_utilizador_rececao == Utilizador.id_utilizador, isouter=True
@@ -1172,6 +1176,8 @@ def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sess
             "username": rececionista.nome_utilizador if rececionista else "---",
             "num_func": rececionista.num_func if rececionista else "---"
         }
+        # Campos de compatibilidade
+        ep_dict["rececionista_nome"] = ep_dict["profissional_info"]["nome"]
 
         # Triagem
         query_triagem = select(Triagem, Utilizador).join(
@@ -1187,6 +1193,8 @@ def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sess
                 "username": u.nome_utilizador if u else "---",
                 "num_func": t.num_func_enfermeiro
             }
+            # Campos de compatibilidade
+            triagem_final["enfermeiro_nome"] = triagem_final["profissional_info"]["nome"]
 
         # Atos (Ordenados cronologicamente)
         query_atos = select(Ato, Utilizador).join(
@@ -1201,6 +1209,9 @@ def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sess
                 "username": u.nome_utilizador if u else "---",
                 "num_func": a.num_func
             }
+            # Campos de compatibilidade
+            ato_dict["profissional_nome"] = ato_dict["profissional_info"]["nome"]
+            ato_dict["profissional_username"] = ato_dict["profissional_info"]["username"]
             atos_finais.append(ato_dict)
 
         # Prescrições (Ordenadas cronologicamente)
@@ -1216,6 +1227,9 @@ def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sess
                 "username": u.nome_utilizador if u else "---",
                 "num_func": p.num_func_medico
             }
+            # Campos de compatibilidade
+            presc_dict["medico_nome"] = presc_dict["profissional_info"]["nome"]
+            presc_dict["medico_username"] = presc_dict["profissional_info"]["username"]
             presc_finais.append(presc_dict)
 
         # Internamento
@@ -1232,13 +1246,17 @@ def obter_historico_utente(num_utente: int, sessao: Session = Depends(obter_sess
                 "username": u.nome_utilizador if u else "---",
                 "num_func": i.num_func_medico
             }
+            # Campos de compatibilidade
+            intern_final["medico_nome"] = intern_final["profissional_info"]["nome"]
+            intern_final["medico_username"] = intern_final["profissional_info"]["username"]
         
         historico.append({
             "episodio": ep_dict,
             "triagem": triagem_final,
             "atos": atos_finais,
             "prescricoes": presc_finais,
-            "internamento": intern_final
+            "internamento": intern_final,
+            "utente": utente_dict
         })
     
     return historico
