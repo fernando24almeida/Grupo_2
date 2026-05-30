@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { usarAutenticacao } from '../services/AuthContext';
-import { ClipboardList, User, Clock, AlertCircle, CheckCircle, ArrowRight, History, Search } from 'lucide-react';
+import { ClipboardList, User, Clock, AlertCircle, CheckCircle, ArrowRight, History, Search, X } from 'lucide-react';
 
 const Triage = () => {
   const { utilizador } = usarAutenticacao();
@@ -16,6 +16,22 @@ const Triage = () => {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
+
+  // Auto-close das mensagens após 30 segundos
+  useEffect(() => {
+    if (message) {
+      const timer = setTimeout(() => {
+        setMessage(null);
+      }, 30000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
+
+  // Limpar mensagens ao mudar de aba ou de paciente
+  useEffect(() => {
+    setMessage(null);
+  }, [activeTab, selectedEpisode]);
+
   const [formData, setFormData] = useState({
     cod_epis: '',
     prioridade: 'AZUL',
@@ -214,9 +230,13 @@ const Triage = () => {
         {/* FORMULÁRIO / HISTÓRICO */}
         <div className="triage-main">
           {message && (
-            <div className={`alert alert-${message.type === 'success' ? 'success' : 'danger'} alert-dismissible fade show`}>
+            <div className={`alert alert-${message.type === 'success' ? 'success' : 'danger'} alert-dismissible fade show`} style={{ position: 'relative' }}>
               {message.text}
-              <button type="button" className="btn-close" onClick={() => setMessage(null)}></button>
+              <X 
+                size={18} 
+                style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', opacity: 0.7 }} 
+                onClick={() => setMessage(null)} 
+              />
             </div>
           )}
 

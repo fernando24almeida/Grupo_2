@@ -111,10 +111,10 @@ const Analytics = () => {
       const data = response.data;
       
       setStats({
-        total_hoje: data.waiting || 0,
+        total_hoje: data.total_hoje || 0,
         em_espera: data.waiting || 0,
-        tempo_medio_espera: data.stats?.[0]?.tempo_medio ? `${data.stats[0].tempo_medio} min` : '0 min',
-        taxa_triagem: '100%',
+        tempo_medio_espera: `${data.tempo_medio_global || 0} min`,
+        taxa_triagem: data.taxa_triagem || '0%',
         prioridades: (data.stats || []).map(s => ({
           label: s.prioridade,
           count: s.quantidade,
@@ -124,30 +124,12 @@ const Analytics = () => {
                  s.prioridade === 'VERDE' ? '#22c55e' : '#3b82f6',
           percent: data.waiting > 0 ? Math.round((s.quantidade / data.waiting) * 100) : 0
         })),
-        recentes: [] // Opcional: buscar de outro endpoint se necessário
+        recentes: data.recentes || []
       });
       setError(null);
     } catch (err) {
-      console.warn('Erro ao carregar /analytics/dashboard-summary. Usando dados simulados.');
-      setStats({
-        total_hoje: 45,
-        em_espera: 12,
-        tempo_medio_espera: '38 min',
-        taxa_triagem: '94%',
-        prioridades: [
-          { label: 'Vermelho', count: 2, color: '#ef4444', percent: 5 },
-          { label: 'Laranja', count: 8, color: '#f97316', percent: 18 },
-          { label: 'Amarelo', count: 15, color: '#eab308', percent: 33 },
-          { label: 'Verde', count: 18, color: '#22c55e', percent: 40 },
-          { label: 'Azul', count: 2, color: '#3b82f6', percent: 4 }
-        ],
-        recentes: [
-          { id: 'E-2024-001', hora: '14:20', prioridade: 'AMARELO', estado: 'Em Atendimento' },
-          { id: 'E-2024-002', hora: '14:35', prioridade: 'VERDE', estado: 'Aguardando' },
-          { id: 'E-2024-003', hora: '14:50', prioridade: 'LARANJA', estado: 'Triado' },
-          { id: 'E-2024-004', hora: '15:05', prioridade: 'VERMELHO', estado: 'Em Emergência' },
-        ]
-      });
+      console.error('Erro ao carregar dados reais da Analítica:', err);
+      setError('Não foi possível carregar os dados reais.');
     } finally {
       setTimeout(() => setLoading(false), 500); 
     }
@@ -424,7 +406,7 @@ const Analytics = () => {
     <div className="analytics-page">
       <header className="page-header">
         <div>
-          <h1 className="page-title">Analítica & Insights</h1>
+          <h1 className="page-title">Analítica & Estatística</h1>
           <p style={{ color: 'var(--text-muted)' }}>Hospital: {utilizador?.hospital || 'Todos os Hospitais'}</p>
         </div>
         <div className="header-actions">

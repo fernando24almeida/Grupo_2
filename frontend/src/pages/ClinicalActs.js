@@ -22,6 +22,22 @@ const ClinicalActs = () => {
   const [prescriptions, setPrescriptions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
+
+  // Auto-close das mensagens após 30 segundos
+  useEffect(() => {
+    if (message) {
+      const timer = setTimeout(() => {
+        setMessage(null);
+      }, 30000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
+
+  // Limpar mensagens ao mudar de aba, paciente ou modo
+  useEffect(() => {
+    setMessage(null);
+  }, [activeTab, selectedEpisode, activeMode]);
+
   const [hospitals, setHospitals] = useState([]);
   const [selectedHospital, setSelectedHospital] = useState(utilizador?.hospital || '');
   
@@ -301,7 +317,16 @@ const ClinicalActs = () => {
         </div>
 
         <div className="medical-main">
-          {message && <div className={`alert alert-${message.type === 'success' ? 'success' : 'danger'} mb-3`}>{message.text}</div>}
+          {message && (
+            <div className={`alert alert-${message.type === 'success' ? 'success' : 'danger'} mb-3`} style={{ position: 'relative' }}>
+              {message.text}
+              <X 
+                size={18} 
+                style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', opacity: 0.7 }} 
+                onClick={() => setMessage(null)} 
+              />
+            </div>
+          )}
 
           {selectedEpisode ? (
             <div className="workspace">

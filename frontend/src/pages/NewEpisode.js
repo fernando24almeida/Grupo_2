@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
 import { usarAutenticacao } from '../services/AuthContext';
-import { Search, UserPlus, AlertCircle, CheckCircle } from 'lucide-react';
+import { Search, UserPlus, AlertCircle, CheckCircle, X } from 'lucide-react';
 
 const NewEpisode = () => {
   const { utilizador } = usarAutenticacao();
@@ -94,6 +94,21 @@ const NewEpisode = () => {
   }, [newUtente.email]);
 
   const [message, setMessage] = useState(null);
+
+  // Auto-close das mensagens após 30 segundos
+  useEffect(() => {
+    if (message) {
+      const timer = setTimeout(() => {
+        setMessage(null);
+      }, 30000);
+      return () => clearTimeout(timer);
+    }
+  }, [message]);
+
+  // Limpar mensagens ao mudar de contexto no formulário
+  useEffect(() => {
+    setMessage(null);
+  }, [showUtenteForm, selectedUtente]);
 
   // Sincronizar hospital com a sessão
   useEffect(() => {
@@ -242,9 +257,9 @@ const NewEpisode = () => {
       </header>
 
       {message && (
-        <div className={`alert ${message.type}`}>
+        <div className={`alert ${message.type}`} style={{ position: 'relative' }}>
           {message.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
-          <span>{message.text}</span>
+          <span style={{ marginRight: '25px' }}>{message.text}</span>
           {message.type === 'info' && !showUtenteForm && (
             <button className="text-button" onClick={() => {
               setShowUtenteForm(true);
@@ -253,6 +268,11 @@ const NewEpisode = () => {
               Registar Novo Utente
             </button>
           )}
+          <X 
+            size={18} 
+            style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', opacity: 0.7 }} 
+            onClick={() => setMessage(null)} 
+          />
         </div>
       )}
 

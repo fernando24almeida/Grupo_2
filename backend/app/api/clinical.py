@@ -830,6 +830,32 @@ def obter_equipa_episodio(cod_epis: str, sessao: Session = Depends(obter_sessao)
     
     return equipa
 
+def obter_nome_profissional(sessao: Session, id_val: Optional[int], tipo_default: str = "Profissional") -> dict:
+    if not id_val:
+        return {"nome": f"{tipo_default} Não Atribuído", "username": "---", "num_func": "---"}
+    
+    # 1. Tentar encontrar na tabela de Utilizadores (onde está o nome_completo)
+    user = sessao.exec(
+        select(Utilizador).where(or_(Utilizador.num_func == id_val, Utilizador.id_utilizador == id_val))
+    ).first()
+    
+    if user:
+        return {
+            "nome": user.nome_completo,
+            "username": user.nome_utilizador,
+            "num_func": user.num_func or user.id_utilizador
+        }
+    
+    # 2. Se não houver utilizador, tentar obter o tipo da tabela de Funcionários
+    func_hosp = sessao.get(FuncionarioHospital, id_val)
+    tipo = func_hosp.tipo_func.capitalize() if func_hosp else tipo_default
+    
+    return {
+        "nome": f"{tipo} {id_val}",
+        "username": "---",
+        "num_func": id_val
+    }
+
 @router.get("/episodes/{cod_epis}/journey")
 def obter_percurso_episodio(
     cod_epis: str, 
@@ -837,97 +863,56 @@ def obter_percurso_episodio(
     utilizador = Depends(obter_utilizador_atual)
 ):
     try:
-        # 1. Episódio e Rececionista
-        query_ep = select(EpisodioUrgencia, Utilizador).join(
-            Utilizador, EpisodioUrgencia.id_utilizador_rececao == Utilizador.id_utilizador, isouter=True
-        ).where(EpisodioUrgencia.cod_epis == cod_epis)
-        
-        res_ep = sessao.exec(query_ep).first()
-        if not res_ep:
+        # 1. Episódio
+        episodio = sessao.get(EpisodioUrgencia, cod_epis)
+        if not episodio:
             raise HTTPException(status_code=404, detail="Episódio não encontrado")
         
-        episodio, rececionista = res_ep
         utente = sessao.get(Utente, episodio.id_utente)
         
         ep_dict = episodio.dict()
-        # Campos de compatibilidade
-        ep_dict["rececionista_nome"] = rececionista.nome_completo if rececionista else "Desconhecido"
-        ep_dict["rececionista_username"] = rececionista.nome_utilizador if rececionista else "---"
-        # Novo padrão uniforme
-        ep_dict["profissional_info"] = {
-            "nome": ep_dict["rececionista_nome"],
-            "username": ep_dict["rececionista_username"],
-            "num_func": rececionista.num_func if rececionista else (episodio.id_utilizador_rececao or "---")
-        }
+        # Obter info do Rececionista
+        prof_rececao = obter_nome_profissional(sessao, episodio.id_utilizador_rececao, "Rececionista")
+        ep_dict["profissional_info"] = prof_rececao
+        ep_dict["rececionista_nome"] = prof_rececao["nome"]
 
         # 2. Triagem
-        query_triagem = select(Triagem, Utilizador).join(
-            Utilizador, or_(Triagem.num_func_enfermeiro == Utilizador.num_func, Triagem.num_func_enfermeiro == Utilizador.id_utilizador), isouter=True
-        ).where(Triagem.cod_epis == cod_epis)
-        res_triagem = sessao.exec(query_triagem).first()
-        
+        triagem = sessao.exec(select(Triagem).where(Triagem.cod_epis == cod_epis)).first()
         triagem_final = None
-        if res_triagem:
-            t, u = res_triagem
-            triagem_final = t.dict()
-            triagem_final["enfermeiro_nome"] = u.nome_completo if u else f"Enfermeiro {t.num_func_enfermeiro}"
-            triagem_final["enfermeiro_username"] = u.nome_utilizador if u else "---"
-            triagem_final["profissional_info"] = {
-                "nome": triagem_final["enfermeiro_nome"],
-                "username": triagem_final["enfermeiro_username"],
-                "num_func": t.num_func_enfermeiro
-            }
+        if triagem:
+            triagem_final = triagem.dict()
+            prof_enf = obter_nome_profissional(sessao, triagem.num_func_enfermeiro, "Enfermeiro")
+            triagem_final["profissional_info"] = prof_enf
+            triagem_final["enfermeiro_nome"] = prof_enf["nome"]
 
-        # 3. Atos (Ordenados cronologicamente)
-        query_atos = select(Ato, Utilizador).join(
-            Utilizador, or_(Ato.num_func == Utilizador.num_func, Ato.num_func == Utilizador.id_utilizador), isouter=True
-        ).where(Ato.cod_epis == cod_epis).order_by(Ato.data_h_inicio.asc())
-        res_atos = sessao.exec(query_atos).all()
+        # 3. Atos
+        atos = sessao.exec(select(Ato).where(Ato.cod_epis == cod_epis).order_by(Ato.data_h_inicio.asc())).all()
         atos_finais = []
-        for a, u in res_atos:
+        for a in atos:
             ato_dict = a.dict()
-            ato_dict["profissional_nome"] = u.nome_completo if u else f"Profissional {a.num_func}"
-            ato_dict["profissional_username"] = u.nome_utilizador if u else "---"
-            ato_dict["profissional_info"] = {
-                "nome": ato_dict["profissional_nome"],
-                "username": ato_dict["profissional_username"],
-                "num_func": a.num_func
-            }
+            prof_med = obter_nome_profissional(sessao, a.num_func, "Médico")
+            ato_dict["profissional_info"] = prof_med
+            ato_dict["profissional_nome"] = prof_med["nome"]
             atos_finais.append(ato_dict)
 
-        # 4. Prescrições (Ordenadas cronologicamente)
-        query_presc = select(Prescricao, Utilizador).join(
-            Utilizador, or_(Prescricao.num_func_medico == Utilizador.num_func, Prescricao.num_func_medico == Utilizador.id_utilizador), isouter=True
-        ).where(Prescricao.cod_epis == cod_epis).order_by(Prescricao.data_h_presc.asc())
-        res_presc = sessao.exec(query_presc).all()
+        # 4. Prescrições
+        prescricoes = sessao.exec(select(Prescricao).where(Prescricao.cod_epis == cod_epis).order_by(Prescricao.data_h_presc.asc())).all()
         presc_finais = []
-        for p, u in res_presc:
+        for p in prescricoes:
             presc_dict = p.dict()
-            presc_dict["medico_nome"] = u.nome_completo if u else f"Médico {p.num_func_medico}"
-            presc_dict["medico_username"] = u.nome_utilizador if u else "---"
-            presc_dict["profissional_info"] = {
-                "nome": presc_dict["medico_nome"],
-                "username": presc_dict["medico_username"],
-                "num_func": p.num_func_medico
-            }
+            prof_presc = obter_nome_profissional(sessao, p.num_func_medico, "Médico")
+            presc_dict["profissional_info"] = prof_presc
+            presc_dict["medico_nome"] = prof_presc["nome"]
             presc_finais.append(presc_dict)
 
         # 5. Internamento
-        query_intern = select(Internamento, Utilizador).join(
-            Utilizador, or_(Internamento.num_func_medico == Utilizador.num_func, Internamento.num_func_medico == Utilizador.id_utilizador), isouter=True
-        ).where(Internamento.cod_epis == cod_epis)
-        res_intern = sessao.exec(query_intern).first()
+        intern = sessao.exec(select(Internamento).where(Internamento.cod_epis == cod_epis)).first()
         intern_final = None
-        if res_intern:
-            i, u = res_intern
-            intern_final = i.dict()
-            intern_final["medico_nome"] = u.nome_completo if u else f"Médico {i.num_func_medico}"
-            intern_final["medico_username"] = u.nome_utilizador if u else "---"
-            intern_final["profissional_info"] = {
-                "nome": intern_final["medico_nome"],
-                "username": intern_final["medico_username"],
-                "num_func": i.num_func_medico
-            }
+        if intern:
+            intern_final = intern.dict()
+            prof_int = obter_nome_profissional(sessao, intern.num_func_medico, "Médico")
+            intern_final["profissional_info"] = prof_int
+            intern_final["medico_nome"] = prof_int["nome"]
             
         return {
             "episodio": ep_dict,

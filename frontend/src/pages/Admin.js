@@ -6,7 +6,10 @@ import {
   History, Eye, FileText, Settings, Database, Briefcase, LogOut
 } from 'lucide-react';
 
+import { usarAutenticacao } from '../services/AuthContext';
+
 const Admin = () => {
+  const { utilizador, hospital: globalHospital } = usarAutenticacao();
   const [activeTab, setActiveTab] = useState('active_flow');
   const [papeis, setPapeis] = useState([]);
   const [hospitais, setHospitais] = useState([]);
@@ -56,11 +59,30 @@ const Admin = () => {
   
   const [mensagem, setMensagem] = useState({ tipo: '', texto: '' });
 
+  // Auto-close das mensagens após 30 segundos
+  useEffect(() => {
+    if (mensagem.texto) {
+      const timer = setTimeout(() => {
+        setMensagem({ tipo: '', texto: '' });
+      }, 30000);
+      return () => clearTimeout(timer);
+    }
+  }, [mensagem]);
+
+  // Limpar mensagens ao mudar de aba
+  useEffect(() => {
+    setMensagem({ tipo: '', texto: '' });
+  }, [activeTab]);
+
   // Filtros
   const [filtros, setFiltros] = useState({ 
     user: '', userType: '', utente: '', episode: '', 
-    hospital: '', triagem: '', ato: '', audit: ''
+    hospital: globalHospital || '', triagem: '', ato: '', audit: ''
   });
+
+  useEffect(() => {
+    setFiltros(prev => ({ ...prev, hospital: globalHospital || '' }));
+  }, [globalHospital]);
 
   const menuItems = [
     { id: 'active_flow', label: 'Fluxo Ativo', icon: Activity },
@@ -340,6 +362,28 @@ const Admin = () => {
     }
   };
 
+  const simularEpisodios = async () => {
+    const hospitalSelecionado = filtros.hospital;
+    const confirmMsg = hospitalSelecionado 
+      ? `Deseja simular 200 episódios para o hospital "${hospitalSelecionado}"?` 
+      : 'Deseja simular 200 episódios distribuídos por todos os hospitais?';
+      
+    if (!window.confirm(confirmMsg)) return;
+    
+    setLoading(true);
+    try {
+      const res = await axios.post('/analytics/simulate-episodes', null, {
+        params: { id_hospital: hospitalSelecionado }
+      });
+      setMensagem({ tipo: 'success', texto: `${res.data.message} (${res.data.total} episódios criados)` });
+      fetchData();
+    } catch (erro) {
+      setMensagem({ tipo: 'error', texto: erro.response?.data?.detail || 'Erro ao simular episódios.' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div className="admin-layout-container">
       <aside className="admin-side-nav">
@@ -379,6 +423,10 @@ const Admin = () => {
             </div>
             <button className="btn-refresh" onClick={fetchData} title="Atualizar Dados">
               <History size={18} />
+            </button>
+            <button className="btn-simulate" onClick={simularEpisodios} title="Simular 200 Episódios">
+              <PlusCircle size={18} />
+              <span>Simular Episódios</span>
             </button>
           </div>
         </header>
@@ -769,27 +817,45 @@ const Admin = () => {
               </div>
               <div className="table-controls">
                 <Search size={18} />
-                <input type="text" placeholder="Pesquisar no arquivo (Cód. Episódio)..." value={filtros.episode} onChange={e => setFiltros({...filtros, episode: e.target.value})} />
+                <input 
+                  type="text" 
+                  placeholder="Pesquisar por Código, Nome ou NIF..." 
+                  value={filtros.episode} 
+                  onChange={e => setFiltros({...filtros, episode: e.target.value})} 
+                />
               </div>
                 <div className="card-body p-0">
                 <table className="admin-table">
-                  <thead><tr><th>Código</th><th>Utente</th><th>Entrada</th><th>Saída (Alta)</th><th>Ações</th></tr></thead>
+                  <thead><tr><th>Código</th><th>Utente (Nome/NIF)</th><th>Entrada</th><th>Saída (Alta)</th><th>Ações</th></tr></thead>
                   <tbody>
-                    {episodiosArquivados.filter(e => 
-                      e.cod_epis.toLowerCase().includes(filtros.episode.toLowerCase()) ||
-                      e.id_utente.toString().includes(filtros.episode)
-                    ).map(e => (
-                      <tr key={e.cod_epis}>
-                        <td><strong>{e.cod_epis}</strong></td>
-                        <td>ID: {e.id_utente}</td>
-                        <td>{new Date(e.data_h_entrada).toLocaleString()}</td>
-                        <td>{e.data_h_saida ? new Date(e.data_h_saida).toLocaleString() : '---'}</td>
-                        <td className="actions">
-                          <button className="btn-icon primary" onClick={() => verPercursoEpisodio(e.cod_epis)} title="Ver Histórico Completo"><FileText size={16}/></button>
-                          <button className="btn-icon danger" onClick={() => handleDelete('episode', e.cod_epis)}><Trash2 size={16}/></button>
-                        </td>
-                      </tr>
-                    ))}
+                    {episodiosArquivados.filter(e => {
+                      const termo = filtros.episode.toLowerCase();
+                      const utenteInfo = utentes.find(u => u.num_utente === e.id_utente);
+                      const nomeUtente = utenteInfo?.nome?.toLowerCase() || "";
+                      
+                      return e.cod_epis.toLowerCase().includes(termo) ||
+                             e.id_utente.toString().includes(termo) ||
+                             nomeUtente.includes(termo);
+                    }).map(e => {
+                      const utenteInfo = utentes.find(u => u.num_utente === e.id_utente);
+                      return (
+                        <tr key={e.cod_epis}>
+                          <td><strong>{e.cod_epis}</strong></td>
+                          <td>
+                            <div className="d-flex flex-column">
+                              <span>{utenteInfo?.nome || 'Utente s/ Nome'}</span>
+                              <small className="text-muted">NIF: {e.id_utente}</small>
+                            </div>
+                          </td>
+                          <td>{new Date(e.data_h_entrada).toLocaleString()}</td>
+                          <td>{e.data_h_saida ? new Date(e.data_h_saida).toLocaleString() : '---'}</td>
+                          <td className="actions">
+                            <button className="btn-icon primary" onClick={() => verPercursoEpisodio(e.cod_epis)} title="Ver Histórico Completo"><FileText size={16}/></button>
+                            <button className="btn-icon danger" onClick={() => handleDelete('episode', e.cod_epis)}><Trash2 size={16}/></button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                     {episodiosArquivados.length === 0 && <tr><td colSpan="5" className="text-center p-5 text-muted">O arquivo está vazio.</td></tr>}
                   </tbody>
                 </table>
@@ -1090,6 +1156,28 @@ const Admin = () => {
         .priority-mini.amarelo { color: #d97706; }
         .priority-mini.verde { color: #16a34a; }
         .priority-mini.azul { color: #2563eb; }
+
+        .btn-simulate {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          background: #2563eb;
+          color: white;
+          border: none;
+          padding: 8px 16px;
+          border-radius: 8px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .btn-simulate:hover {
+          background: #1d4ed8;
+          transform: translateY(-1px);
+          box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+        .btn-simulate:active {
+          transform: translateY(0);
+        }
       `}</style>
     </div>
   );

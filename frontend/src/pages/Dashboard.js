@@ -19,27 +19,43 @@ import {
 const Dashboard = () => {
   const { utilizador, hospital } = usarAutenticacao();
   const navigate = useNavigate();
-  const [stats, setStats] = useState({ waiting: 0, critical: 0, stats: [] });
+  const [stats, setStats] = useState({ waiting: 0, critical: 0, stats: [], updatedAt: null });
   const [meusEpisodios, setMeusEpisodios] = useState([]);
   const [loading, setLoading] = useState(false);
   const [selectedJourney, setSelectedJourney] = useState(null);
+  const [mensagem, setMensagem] = useState({ tipo: '', texto: '' });
+
+  // Auto-close das mensagens após 30 segundos
+  useEffect(() => {
+    if (mensagem.texto) {
+      const timer = setTimeout(() => {
+        setMensagem({ tipo: '', texto: '' });
+      }, 30000);
+      return () => clearTimeout(timer);
+    }
+  }, [mensagem]);
 
   useEffect(() => {
+    setMensagem({ tipo: '', texto: '' }); // Limpar mensagens ao mudar de contexto
     if (utilizador?.role === 'UTENTE') {
       fetchMeusEpisodios();
     } else {
       fetchStats();
-      const interval = setInterval(fetchStats, 60000);
+      const interval = setInterval(fetchStats, 30000); // Atualizar a cada 30s
       return () => clearInterval(interval);
     }
   }, [hospital, utilizador]);
 
   const fetchStats = async () => {
     try {
+      // Se for admin, o hospital pode ser null (Todos os Hospitais)
+      // Se for outro profissional, usa o hospital selecionado no seletor
       const params = hospital ? { id_hospital: hospital } : {};
       const res = await axios.get('/analytics/dashboard-summary', { params });
       setStats(res.data);
-    } catch (e) { console.error('Erro ao carregar stats', e); }
+    } catch (e) { 
+      console.error('Erro ao carregar stats do hospital:', hospital, e); 
+    }
   };
 
   const fetchMeusEpisodios = async () => {
@@ -310,12 +326,19 @@ const Dashboard = () => {
       <header className="page-header">
         <div>
           <h1 className="page-title">Bem-vindo, {utilizador?.nome_utilizador}</h1>
-          <p style={{ color: 'var(--text-muted)' }}>Hospital: {utilizador?.hospital}</p>
+          <p style={{ color: 'var(--text-muted)' }}>Hospital: {hospital || 'Todos os Hospitais'}</p>
         </div>
         <div className="date-display" style={{ textAlign: 'right' }}>
           <p style={{ fontWeight: 600 }}>{new Date().toLocaleDateString('pt-PT', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
         </div>
       </header>
+
+      {mensagem.texto && (
+        <div className={`alert alert-${mensagem.tipo}`} style={{ marginBottom: '1.5rem' }}>
+          <span>{mensagem.texto}</span>
+          <X size={18} className="close-msg" onClick={() => setMensagem({ ...mensagem, texto: '' })} />
+        </div>
+      )}
 
       {/* Stats Summary */}
       <div className="stats-grid">
