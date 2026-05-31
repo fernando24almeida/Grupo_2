@@ -5,7 +5,7 @@ from typing import Optional
 
 class Configuracoes(BaseSettings):
     # O default é localhost para desenvolvimento, mas em produção (Render) deve vir do env
-    DATABASE_URL: str = "postgresql://postgres:admin@127.0.0.1:5432/urgencias_g2"
+    DATABASE_URL: str = "postgresql://postgres:123456@127.0.0.1:5432/urgencias_g2"
     SECRET_KEY: str = "supersecretkey"
     ENCRYPTION_KEY: str = "z2AkT7uJkt85JNw4pjZ5ZlblXpMjMQZ49QBT673bUEE=" # Deve ser gerada via Fernet.generate_key()
     ALGORITHM: str = "HS256"

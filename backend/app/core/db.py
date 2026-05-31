@@ -40,7 +40,13 @@ def inicializar_bd():
         colunas_necessarias = [
             ("utente", "parentesco", "VARCHAR(100)"),
             ("utente", "id_role", "INT REFERENCES role(id_role)"),
+            ("utente", "role_name", "VARCHAR(100)"),
+            ("utilizador", "role_name", "VARCHAR(100)"),
+            ("medico", "especialidade", "VARCHAR(100)"),
+            ("medico", "estagiario", "VARCHAR(10)"),
             ("episodio_urgencia", "id_utilizador_rececao", "INT REFERENCES utilizador(id_utilizador)"),
+            ("episodio_urgencia", "sintomas", "TEXT"),
+            ("episodio_urgencia", "observacoes", "TEXT"),
             ("ato", "diagnostico", "TEXT"),
             ("ato", "notas_clinicas", "TEXT"),
             ("ato", "exame_fisico", "TEXT"),
