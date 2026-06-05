@@ -15,12 +15,61 @@ from ..models.models import PapelUtilizador, Hospital, FuncionarioHospital, Util
 engine = create_engine(configuracoes.DATABASE_URL)
 
 def inicializar_bd():
+<<<<<<< HEAD
     """ 
     Garante que a base de dados tem as tabelas criadas e os dados 
     iniciais (como o Administrador e os Cargos) para o sistema funcionar.
     """
     import logging
     logger = logging.getLogger("uvicorn.error")
+=======
+    try:
+        # 1. Tenta criar as tabelas base
+        SQLModel.metadata.create_all(motor)
+        
+        # 2. Migrações automáticas (Self-healing)
+        # Adiciona colunas que podem estar em falta em instalações existentes
+        from sqlalchemy import text
+        colunas_necessarias = [
+            ("utente", "parentesco", "VARCHAR(100)"),
+            ("utente", "id_role", "INT REFERENCES role(id_role)"),
+            ("utente", "role_name", "VARCHAR(100)"),
+            ("utilizador", "role_name", "VARCHAR(100)"),
+            ("medico", "especialidade", "VARCHAR(100)"),
+            ("medico", "estagiario", "VARCHAR(10)"),
+            ("episodio_urgencia", "id_utilizador_rececao", "INT REFERENCES utilizador(id_utilizador)"),
+            ("episodio_urgencia", "sintomas", "TEXT"),
+            ("episodio_urgencia", "observacoes", "TEXT"),
+            ("ato", "diagnostico", "TEXT"),
+            ("ato", "notas_clinicas", "TEXT"),
+            ("ato", "exame_fisico", "TEXT"),
+            ("ato", "decisao_clinica", "VARCHAR(50)"),
+            ("internamento", "num_func_medico", "INT REFERENCES medico(num_func)")
+        ]
+        
+        with motor.connect() as conn:
+            for tabela, coluna, tipo in colunas_necessarias:
+                try:
+                    # Verificar se a coluna existe
+                    check = conn.execute(text(f"SELECT count(*) FROM information_schema.columns WHERE table_name='{tabela}' AND column_name='{coluna}';")).scalar()
+                    if check == 0:
+                        print(f"[MIGRATE] Adicionando coluna '{coluna}' à tabela '{tabela}'...")
+                        conn.execute(text(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {tipo};"))
+                        conn.commit()
+                except Exception as me:
+                    print(f"[MIGRATE ERROR] Falha ao adicionar {tabela}.{coluna}: {me}")
+            
+            # Remover unique do email se existir
+            try:
+                conn.execute(text("ALTER TABLE utente DROP CONSTRAINT IF EXISTS utente_email_key;"))
+                conn.commit()
+            except: pass
+
+        print("[SUCCESS] Base de dados inicializada e migrada com sucesso.")
+    except Exception as e:
+        print(f"[ERROR] Erro ao ligar à base de dados: {e}")
+        raise e
+>>>>>>> 755ba7b546f82761405dac367cee876e346ab523
     
     # Importamos aqui dentro para evitar que o Python entre num círculo sem fim
     # (Circular Import) com o ficheiro de segurança.

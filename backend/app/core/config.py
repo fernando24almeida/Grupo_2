@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings
 # =============================================================================
 
 class Configuracoes(BaseSettings):
+<<<<<<< HEAD
     """
     Esta classe lê os dados do ficheiro .env ou do ambiente (Docker).
     Se não encontrar nada, usa os valores padrão (default).
@@ -22,6 +23,10 @@ class Configuracoes(BaseSettings):
     DATABASE_URL: str = "postgresql://postgres:admin@localhost:5432/urgencias_g2"
     
     # Segurança (Chaves para trancar a porta e cifrar dados)
+=======
+    # O default é localhost para desenvolvimento, mas em produção (Render) deve vir do env
+    DATABASE_URL: str = "postgresql://postgres:123456@127.0.0.1:5432/urgencias_g2"
+>>>>>>> 755ba7b546f82761405dac367cee876e346ab523
     SECRET_KEY: str = "supersecretkey"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 480 # O login dura 8 horas
