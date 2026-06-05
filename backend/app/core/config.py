@@ -1,19 +1,37 @@
 import os
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import field_validator
-from typing import Optional
+from pydantic_settings import BaseSettings
+
+# =============================================================================
+# CONFIGURAÇÕES GERAIS DO SISTEMA
+# 
+# EXPLICAÇÃO PARA ALUNOS:
+# Este ficheiro guarda os "segredos" e definições do sistema, como o URL 
+# da base de dados, chaves de segurança e definições de e-mail. Usamos 
+# variáveis de ambiente para que estes dados sensíveis não fiquem expostos.
+# =============================================================================
 
 class Configuracoes(BaseSettings):
-    # O default é localhost para desenvolvimento, mas em produção (Render) deve vir do env
-    DATABASE_URL: str = "postgresql://postgres:admin@127.0.0.1:5432/urgencias_g2"
+    """
+    Esta classe lê os dados do ficheiro .env ou do ambiente (Docker).
+    Se não encontrar nada, usa os valores padrão (default).
+    """
+    
+    # Base de Dados (Onde guardamos tudo)
+    # Se estivermos a correr localmente (Windows), usamos localhost.
+    # Se estivermos no Docker, o Docker define o DATABASE_URL para "db".
+    DATABASE_URL: str = "postgresql://postgres:admin@localhost:5432/urgencias_g2"
+    
+    # Segurança (Chaves para trancar a porta e cifrar dados)
     SECRET_KEY: str = "supersecretkey"
-    ENCRYPTION_KEY: str = "z2AkT7uJkt85JNw4pjZ5ZlblXpMjMQZ49QBT673bUEE=" # Deve ser gerada via Fernet.generate_key()
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 480 # O login dura 8 horas
+    
+    # Chave para Criptografia de Dados de Pacientes (AES)
+    ENCRYPTION_KEY: str = "T0ZfU2VjcmV0X0VuY3J5cHRpb25fS2V5X0Zvcl9QYXRpZW50X0RhdGE="
 
-    # Configurações SMTP (E-mail)
+    # Configurações de E-mail (Para enviar códigos de ativação)
     MAIL_USERNAME: str = "geral@sci.pt"
-    MAIL_PASSWORD: str = "jbfn alir tral urks"
+    MAIL_PASSWORD: str = "jbfn alir tral urks" # Password de aplicação
     MAIL_FROM: str = "geral@sci.pt"
     MAIL_PORT: int = 587
     MAIL_SERVER: str = "smtp.gmail.com"
@@ -22,28 +40,10 @@ class Configuracoes(BaseSettings):
     MAIL_SSL_TLS: bool = False
     USE_CREDENTIALS: bool = True
 
-    # Detectar se estamos no Render
-    RENDER: bool = os.environ.get("RENDER", "false").lower() == "true"
+    model_config = {
+        "env_file": ".env", # Tenta ler deste ficheiro se ele existir
+        "case_sensitive": True
+    }
 
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        extra="ignore"
-    )
-
-    @field_validator("DATABASE_URL", mode="before")
-    @classmethod
-    def fix_postgres_scheme(cls, v: str) -> str:
-        if not v:
-            return v
-        # Render fornece URLs que começam com postgres://, mas o SQLAlchemy 1.4+ exige postgresql://
-        if v.startswith("postgres://"):
-            v = v.replace("postgres://", "postgresql://", 1)
-        
-        # Se estivermos no Render e a URL ainda for localhost, há algo errado na configuração
-        if os.environ.get("RENDER", "false").lower() == "true" and "localhost" in v:
-            print("⚠️ AVISO: Detectado ambiente Render mas DATABASE_URL aponta para localhost!")
-            
-        return v
-
+# Criamos uma instância única para usar em todo o projeto
 configuracoes = Configuracoes()

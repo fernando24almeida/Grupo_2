@@ -105,9 +105,11 @@ const NewEpisode = () => {
     }
   }, [message]);
 
-  // Limpar mensagens ao mudar de contexto no formulário
+  // Limpar mensagens ao mudar de contexto no formulário (exceto se for sucesso)
   useEffect(() => {
-    setMessage(null);
+    if (message && message.type !== 'success') {
+      setMessage(null);
+    }
   }, [showUtenteForm, selectedUtente]);
 
   // Sincronizar hospital com a sessão
@@ -203,8 +205,12 @@ const NewEpisode = () => {
 
       const res = await axios.post('/clinical/utentes', payload);
       setMessage({ type: 'success', text: `Utente ${newUtente.nome} registado! PIN enviado para o e-mail.` });
-      setSelectedUtente(res.data);
-      setFormData(prev => ({ ...prev, id_utente: res.data.num_utente }));
+      
+      // O backend devolve { success: true, data: { ...utente... } }
+      const utenteCriado = res.data.data;
+      setSelectedUtente(utenteCriado);
+      setFormData(prev => ({ ...prev, id_utente: utenteCriado.num_utente }));
+      
       setShowUtenteForm(false);
       setEmailInUse(false);
     } catch (error) {
@@ -219,6 +225,7 @@ const NewEpisode = () => {
 
   const handleSubmitEpisode = async (e) => {
     e.preventDefault();
+    setMessage(null);
     if (!selectedUtente) {
       setMessage({ type: 'error', text: 'Por favor, selecione ou registe um utente primeiro.' });
       return;
@@ -257,7 +264,7 @@ const NewEpisode = () => {
       </header>
 
       {message && (
-        <div className={`alert ${message.type}`} style={{ position: 'relative' }}>
+        <div className={`alert alert-${message.type}`} style={{ position: 'relative' }}>
           {message.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
           <span style={{ marginRight: '25px' }}>{message.text}</span>
           {message.type === 'info' && !showUtenteForm && (

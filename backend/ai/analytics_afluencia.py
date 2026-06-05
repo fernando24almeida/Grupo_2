@@ -10,23 +10,35 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score
 
+# =============================================================================
+# MÓDULO DE INTELIGÊNCIA ARTIFICIAL: PREVISÃO DE AFLUÊNCIA HOSPITALAR
+# 
+# EXPLICAÇÃO PARA ALUNOS:
+# Este ficheiro é o "cérebro" estatístico do projeto. O seu objetivo é olhar 
+# para o passado (histórico de entradas no hospital) e tentar adivinhar o 
+# futuro (quantas pessoas virão ao hospital em certas horas e dias).
+# =============================================================================
+
 # Configuração robusta de imports para o backend
-# Adiciona o diretório 'backend' ao sys.path se necessário
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
 try:
-    # Tenta importar usando o caminho absoluto do projeto
     from app.core.config import configuracoes
     DATABASE_URL = configuracoes.DATABASE_URL
 except ImportError:
-    # Fallback para desenvolvimento local
+    # Caso a aplicação não esteja a correr no servidor real, usa esta morada padrão
     DATABASE_URL = "postgresql://postgres:admin@127.0.0.1:5432/urgencias_g2"
 
 @dataclass
 class AnalyticsResult:
+    """
+    Esta 'caixa' guarda os resultados da nossa análise para os enviar ao ecrã.
+    Guarda: quão bom é o modelo, o que é mais importante (ex: a hora), 
+    as médias de pessoas e algumas previsões de exemplo.
+    """
     metricas_modelo: Dict[str, float]
     importancia_features: List[Dict[str, Any]]
     afluencia_por_dia_semana: List[Dict[str, Any]]
@@ -35,6 +47,10 @@ class AnalyticsResult:
 
 
 def classificar_periodo(hora: int) -> str:
+    """
+    Função simples para agrupar as 24 horas do dia em 4 blocos amigáveis:
+    Madrugada, Manhã, Tarde e Noite.
+    """
     if 0 <= hora < 6:
         return "Madrugada"
     if 6 <= hora < 12:
@@ -45,6 +61,10 @@ def classificar_periodo(hora: int) -> str:
 
 
 def calcular_medias_simples(df_modelo: pd.DataFrame, coluna: str) -> List[Dict[str, Any]]:
+    """
+    Calcula a média de pessoas que costumam vir por cada dia da semana 
+    ou por cada período (ex: 'Às Segundas vêm em média 15 pessoas').
+    """
     if df_modelo.empty:
         return []
     
@@ -66,6 +86,10 @@ def calcular_medias_simples(df_modelo: pd.DataFrame, coluna: str) -> List[Dict[s
 
 
 def carregar_dados() -> tuple[pd.DataFrame, str]:
+    """
+    Vai buscar à base de dados SQL a lista de todos os doentes que entraram.
+    O Pandas (pd) transforma essa lista numa tabela fácil de ler para o computador.
+    """
     engine = create_engine(DATABASE_URL)
     query = text("SELECT cod_epis, data_h_entr FROM episodio_urgencia WHERE data_h_entr IS NOT NULL")
 
@@ -80,6 +104,11 @@ def carregar_dados() -> tuple[pd.DataFrame, str]:
 
 
 def preparar_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Esta função 'limpa' os dados. Ela separa a data em partes:
+    Mês, Dia da Semana, Hora, etc. No final, conta quantos doentes 
+    estavam no hospital em cada hora de cada dia.
+    """
     if df.empty:
         return pd.DataFrame()
         
@@ -103,6 +132,13 @@ def preparar_dataset(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def treinar_modelo(df_modelo: pd.DataFrame) -> AnalyticsResult:
+    """
+    AQUI ACONTECE A MAGIA (IA):
+    1. Preparamos os dados para o algoritmo.
+    2. Usamos o 'Random Forest' (uma floresta de decisões) para aprender os padrões.
+    3. Testamos se ele aprendeu bem (métricas mae e r2).
+    4. Guardamos o que ele acha mais importante para prever a afluência.
+    """
     if df_modelo.empty or len(df_modelo) < 5:
         return AnalyticsResult(
             {"mae": 0, "r2": 0}, [], 
@@ -111,38 +147,41 @@ def treinar_modelo(df_modelo: pd.DataFrame) -> AnalyticsResult:
             []
         )
 
+    # Transforma texto em números para o modelo entender (One-Hot Encoding)
     df_encoded = pd.get_dummies(
         df_modelo[["hora", "dia_semana_num", "mes", "fim_semana", "periodo_dia"]],
         columns=["periodo_dia"],
         drop_first=False
     )
 
-    X = df_encoded
-    y = df_modelo["afluencia"]
+    X = df_encoded # O que usamos para prever (Hora, Dia...)
+    y = df_modelo["afluencia"] # O que queremos adivinhar (Quantas pessoas)
 
-    # Divisão treino/teste para métricas reais
-    # Se houver dados insuficientes para o split (ex: apenas 1 linha em y_test), usamos todo o conjunto
+    # Separamos uma parte para 'estudar' e outra para 'fazer o exame' (teste)
     if len(df_modelo) < 10:
         X_train, X_test, y_train, y_test = X, X, y, y
     else:
         X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+    # Criamos a Inteligência Artificial (Floresta de Decisão)
     modelo = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42)
-    modelo.fit(X_train, y_train)
+    modelo.fit(X_train, y_train) # Treinar!
 
-    y_pred = modelo.predict(X_test)
+    y_pred = modelo.predict(X_test) # Fazer o teste
 
+    # Ver se as notas do exame foram boas
     metricas = {
-        "mae": round(float(mean_absolute_error(y_test, y_pred)), 3),
-        "r2": round(float(r2_score(y_test, y_pred)), 3),
+        "mae": round(float(mean_absolute_error(y_test, y_pred)), 3), # Erro médio de pessoas
+        "r2": round(float(r2_score(y_test, y_pred)), 3), # De 0 a 1, quão perto estamos da perfeição
     }
 
+    # Ver o que o modelo achou mais importante (ex: 'A hora é mais importante que o mês')
     importancia = sorted([
         {"feature": col, "importancia": round(float(imp), 4)}
         for col, imp in zip(X.columns, modelo.feature_importances_)
     ], key=lambda x: x["importancia"], reverse=True)
 
-    # Previsões de exemplo para o frontend
+    # Criar alguns exemplos de 'bola de cristal' para mostrar no Dashboard
     exemplos = pd.DataFrame([
         {"hora": 10, "dia_semana_num": 0, "mes": 5, "fim_semana": 0, "periodo_dia": "Manhã"},
         {"hora": 16, "dia_semana_num": 4, "mes": 5, "fim_semana": 0, "periodo_dia": "Tarde"},
@@ -172,6 +211,10 @@ def treinar_modelo(df_modelo: pd.DataFrame) -> AnalyticsResult:
 
 
 def executar_analytics() -> Dict[str, Any]:
+    """
+    Função principal que corre todo o processo:
+    Carrega -> Prepara -> Treina -> Devolve os resultados.
+    """
     df, erro = carregar_dados()
     
     if df.empty:
@@ -199,6 +242,7 @@ def executar_analytics() -> Dict[str, Any]:
         "previsoes_exemplo": resultado.previsoes_exemplo
     }
 
+# Se corrermos este ficheiro sozinho no terminal, ele mostra os resultados no ecrã
 if __name__ == "__main__":
     import json
     print(json.dumps(executar_analytics(), indent=2, ensure_ascii=False))

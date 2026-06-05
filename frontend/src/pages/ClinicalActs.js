@@ -5,25 +5,27 @@ import { usarAutenticacao } from '../services/AuthContext';
 import { 
   Clipboard, HeartPulse, Thermometer, 
   Clock, CheckCircle, ArrowRight,
-  Activity, Hotel, Search
+  Activity, Hotel, Search, X
 } from 'lucide-react';
 
 const ClinicalActs = () => {
+  // --- ESTADO DO COMPONENTE (Memória local para guardar dados e controlar o que aparece no ecrã) ---
   const { utilizador } = usarAutenticacao();
   const navigate = useNavigate();
-  const [activeMode, setActiveMode] = useState('urgencia'); // 'urgencia' ou 'internamento'
-  const [activeTab, setActiveTab] = useState('treatment');
-  const [queue, setQueue] = useState([]);
-  const [internments, setInternments] = useState([]);
-  const [selectedEpisode, setSelectedEpisode] = useState(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isHospitalizedPatient, setIsHospitalizedPatient] = useState(false);
-  const [history, setHistory] = useState([]);
-  const [prescriptions, setPrescriptions] = useState([]);
+  const [activeMode, setActiveMode] = useState('urgencia'); // Alterna entre modo Urgência e Internamento
+  const [activeTab, setActiveTab] = useState('treatment'); // Controla qual aba está ativa (Tratamento, Histórico, etc)
+  const [queue, setQueue] = useState([]); // Guarda a lista de pacientes à espera na urgência
+  const [internments, setInternments] = useState([]); // Guarda a lista de pacientes atualmente internados
+  const [selectedEpisode, setSelectedEpisode] = useState(null); // Guarda o episódio do paciente que estamos a atender
+  const [searchQuery, setSearchQuery] = useState(''); // Guarda o texto escrito na barra de pesquisa
+  const [isHospitalizedPatient, setIsHospitalizedPatient] = useState(false); // Indica se o paciente atual é de internamento
+  const [history, setHistory] = useState([]); // Guarda o histórico clínico do utente
+  const [prescriptions, setPrescriptions] = useState([]); // Guarda as receitas/prescrições do episódio atual
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState(null);
 
-  // Auto-close das mensagens após 30 segundos
+  // --- EFEITOS AUTOMÁTICOS (Código que corre sozinho quando algo muda) ---
+  // Fecha as mensagens de aviso automaticamente após 30 segundos
   useEffect(() => {
     if (message) {
       const timer = setTimeout(() => {
@@ -33,7 +35,7 @@ const ClinicalActs = () => {
     }
   }, [message]);
 
-  // Limpar mensagens ao mudar de aba, paciente ou modo
+  // Limpa mensagens do ecrã ao mudar de aba, de paciente ou de modo de atendimento
   useEffect(() => {
     setMessage(null);
   }, [activeTab, selectedEpisode, activeMode]);
@@ -41,6 +43,7 @@ const ClinicalActs = () => {
   const [hospitals, setHospitals] = useState([]);
   const [selectedHospital, setSelectedHospital] = useState(utilizador?.hospital || '');
   
+  // Dados do formulário para registar um Ato Médico (Consulta ou Exame)
   const [atoData, setAtoData] = useState({ 
     tipo: 'CONSULTA', 
     data_h_inicio: new Date().toISOString().slice(0, 16),
@@ -49,13 +52,15 @@ const ClinicalActs = () => {
     notas_clinicas: '',
     decisao_clinica: 'CONTINUAR'
   });
-  const [prescData, setPrescData] = useState({ medicamento: '', dosagem: '' });
   
+  // Dados para criar novas prescrições e gerir o internamento
+  const [prescData, setPrescData] = useState({ medicamento: '', dosagem: '' });
   const [services, setServices] = useState([]);
   const [internData, setInternData] = useState({ id_servico: '', num_cama: '' });
   const [availableBeds, setAvailableBeds] = useState([]);
   const [loadingBeds, setLoadingBeds] = useState(false);
 
+  // Procura camas livres sempre que o médico escolhe um serviço para internar o paciente
   useEffect(() => {
     if (internData.id_servico) {
       setLoadingBeds(true);
@@ -73,11 +78,23 @@ const ClinicalActs = () => {
     }
   }, [internData.id_servico]);
 
+  // --- FUNÇÕES DE AÇÃO (Chamadas por botões ou cliques no ecrã) ---
+  // Muda entre o modo de Urgência (azul) e o modo de Internamento (vermelho)
   const handleModeChange = (mode) => {
     setActiveMode(mode);
-    setSelectedEpisode(null);
+    setSelectedEpisode(null); // Limpa o paciente selecionado ao mudar de modo
     setIsHospitalizedPatient(mode === 'internamento');
+    setInternData({ id_servico: '', num_cama: '' });
+    setAvailableBeds([]);
+    setSearchQuery(''); // Limpa a pesquisa ao trocar de modo
     setMessage(null);
+    
+    // Opcional: Limpar as listas locais para mostrar que está a carregar dados novos
+    setQueue([]);
+    setInternments([]);
+    setLoading(true);
+    
+    fetchQueue(); // Refresh data when switching modes
   };
 
   useEffect(() => {
@@ -86,6 +103,7 @@ const ClinicalActs = () => {
     }
   }, [utilizador?.hospital]);
 
+  // Vai buscar a lista de hospitais ao servidor quando a página carrega
   useEffect(() => {
     const fetchData = async () => {
       try {
@@ -100,6 +118,7 @@ const ClinicalActs = () => {
     fetchData();
   }, []);
 
+  // Atualiza as listas de pacientes (fila de espera e internados) vindas do servidor
   const fetchQueue = async () => {
     if (!selectedHospital) return;
     try {
@@ -122,12 +141,15 @@ const ClinicalActs = () => {
     }
   }, [selectedHospital]);
 
+  // Função disparada ao clicar num paciente da lista lateral para ver os seus detalhes
   const handleSelectPatient = async (cod, isIntern = false) => {
     try {
+      // 1. Vai buscar os dados básicos do episódio
       const res = await axios.get(`/clinical/episodes/${cod}`);
       setSelectedEpisode(res.data);
       setIsHospitalizedPatient(isIntern);
       
+      // 2. Limpa o formulário para começar um novo atendimento
       setAtoData({ 
         tipo: 'CONSULTA', 
         data_h_inicio: new Date().toISOString().slice(0, 16),
@@ -136,14 +158,17 @@ const ClinicalActs = () => {
         notas_clinicas: '',
         decisao_clinica: 'CONTINUAR'
       });
+      setInternData({ id_servico: '', num_cama: '' });
+      setAvailableBeds([]);
       
+      // 3. Carrega o histórico completo e as receitas que o paciente já tem
       const [histRes, prescRes] = await Promise.all([
         axios.get(`/clinical/utentes/${res.data.id_utente}/history`),
         axios.get(`/clinical/episodes/${cod}/prescriptions`)
       ]);
       setHistory(histRes.data);
       setPrescriptions(prescRes.data);
-      setActiveTab('treatment');
+      setActiveTab('treatment'); // Abre automaticamente a aba de tratamento
     } catch (error) { console.error('Erro ao buscar detalhes', error); }
   };
 
@@ -183,6 +208,8 @@ const ClinicalActs = () => {
       }
       
       setSelectedEpisode(null);
+      setInternData({ id_servico: '', num_cama: '' });
+      setAvailableBeds([]);
       fetchQueue();
     } catch (error) { setMessage({ type: 'error', text: 'Erro ao processar decisão clínica.' }); }
   };

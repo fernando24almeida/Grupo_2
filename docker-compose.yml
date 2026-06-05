@@ -13,7 +13,7 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./database/full_schema_v2.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/init.sql
 
   backend:
     build:
@@ -39,6 +39,17 @@ services:
     depends_on:
       - db
 
+  seed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: clinical-seed
+    environment:
+      - DATABASE_URL=postgresql://postgres:admin@db:5432/urgencias_g2
+    command: python seed_random_data.py
+    depends_on:
+      - backend
+
   frontend:
     build:
       context: ./frontend
@@ -46,7 +57,7 @@ services:
     container_name: clinical-frontend
     restart: always
     ports:
-      - "3000:80"
+      - "3000:10000"
     depends_on:
       - backend
 

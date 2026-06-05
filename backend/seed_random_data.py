@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 
 import random
 from datetime import datetime, timedelta, date, timezone
@@ -7,6 +8,13 @@ from typing import List
 from faker import Faker
 from sqlmodel import Session, create_engine, select, SQLModel
 from passlib.context import CryptContext
+
+# Tenta importar as configurações do app, senão usa variável de ambiente ou default
+try:
+    from app.core.config import configuracoes
+    DATABASE_URL = configuracoes.DATABASE_URL
+except ImportError:
+    DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://postgres:admin@localhost:5432/urgencias_g2")
 
 from app.models.models import (
     PapelUtilizador,
@@ -24,8 +32,6 @@ from app.models.models import (
     ServicoHospitalar,
     Internamento,
 )
-
-DATABASE_URL = "postgresql://postgres:123456@localhost:5432/urgencias_g2"
 
 SEED = 42
 TOTAL_UTENTES = 1000
@@ -383,13 +389,12 @@ def criar_atos(
         )
         sessao.add(ato)
         sessao.commit()
+        sessao.refresh(ato)
 
         sessao.add(
             Envolve(
-                data_h_inicio=ato.data_h_inicio,
-                num_func=num_func,
-                cod_epis=cod_epis,
-                id_hosp=hosp,
+                id_ato=ato.id_ato,
+                num_func=num_func
             )
         )
         sessao.commit()
@@ -465,7 +470,7 @@ def main() -> None:
 
     print("Seed concluído com sucesso.")
     print("Login admin:")
-    print("  username: admin")
+    print("  username: admin123")
     print("  password: admin123")
 
 

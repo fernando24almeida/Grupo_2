@@ -37,41 +37,40 @@ graph LR
 Detalhamento dos grandes módulos do sistema, repositórios de dados e as interconexões principais.
 
 ```mermaid
-dfd2
+flowchart TD
     %% Entidades Externas
-    entity U as Utente (Mobile)
-    entity S as Staff (Web)
-    entity E as Serviço de Email
+    U([Utente - Mobile])
+    S([Staff - Web])
+    E([Serviço de Email])
 
     %% Processos
-    process P1 as 1.0<br/>Autenticação e MFA
-    process P2 as 2.0<br/>Gestão Clínica<br/>(Registo, Triagem, Atos)
-    process P3 as 3.0<br/>Analytics e AI<br/>(Previsão de Afluência)
-    process P4 as 4.0<br/>Auditoria e Segurança
+    P1{1.0 Autenticação e MFA}
+    P2{2.0 Gestão Clínica}
+    P3{3.0 Analytics e AI}
+    P4{4.0 Auditoria e Segurança}
 
     %% Depósitos de Dados (Data Stores)
-    storage D1 as [DB] Utilizadores e Utentes
-    storage D2 as [DB] Registos Clínicos<br/>(Episódios, Triagens, Prescrições)
-    storage D3 as [DB] Logs de Auditoria
+    D1[(DB: Utilizadores)]
+    D2[(DB: Registos Clínicos)]
+    D3[(DB: Logs Auditoria)]
 
     %% Fluxos de Dados
-    U -> P1 : Credenciais e Código MFA
-    S -> P1 : Credenciais (Admin/Médico)
-    P1 -> D1 : Validar Utilizador
-    P1 -> E : Enviar Código de Verificação
+    U --> P1
+    S --> P1
+    P1 --- D1
+    P1 --> E
 
-    S -> P2 : Registar Episódio/Triagem
-    P2 -> D2 : Gravar Dados Clínicos
-    D2 -> P2 : Consultar Histórico
-    P2 -> U : Visualizar Estado/Receitas
+    S --> P2
+    P2 --- D2
+    P2 --> U
 
-    D2 -> P3 : Dados Históricos de Afluência
-    P3 -> S : Dashboard de Previsão AI
-    P3 -> D2 : Gravar Simulações
+    D2 --> P3
+    P3 --> S
+    P3 --- D2
 
-    P1 -> P4 : Evento de Login
-    P2 -> P4 : Alteração de Registo
-    P4 -> D3 : Gravar Log (IP, Utilizador, Ação)
+    P1 --> P4
+    P2 --> P4
+    P4 --- D3
 ```
 
 ---
@@ -82,63 +81,64 @@ dfd2
 Focado na segurança de acesso e recuperação de conta.
 
 ```mermaid
-dfd2
-    entity U as Utilizador
-    entity E as Provedor de Email
+flowchart TD
+    U([Utilizador])
+    E([Provedor de Email])
 
-    process P1_1 as 1.1<br/>Validação de Credenciais
-    process P1_2 as 1.2<br/>Verificação MFA / TOTP
-    process P1_3 as 1.3<br/>Geração de Token JWT
+    P1_1{1.1 Validação Credenciais}
+    P1_2{1.2 Verificação MFA}
+    P1_3{1.3 Geração Token JWT}
 
-    storage D1 as [DB] Utilizadores
-    storage D3 as [DB] Secrets/Tokens
+    D1[(DB: Utilizadores)]
+    D3[(DB: Secrets/Tokens)]
 
-    U -> P1_1 : Username/Pass
-    P1_1 -> D1 : Validar
-    P1_1 -> P1_2 : Requer MFA
-    U -> P1_2 : Código 6 Dígitos
-    P1_2 -> D3 : Verificar Secret
-    P1_2 -> P1_3 : Autorizado
-    P1_3 -> U : JWT Token
+    U --> P1_1
+    P1_1 --- D1
+    P1_1 --> P1_2
+    U --> P1_2
+    P1_2 --- D3
+    P1_2 --> P1_3
+    P1_3 --> U
 ```
 
 ### 3.2. Triagem de Manchester (Processo 2.0)
 Fluxo clínico de atribuição de prioridade.
 
 ```mermaid
-dfd2
-    entity S as Enfermeiro
+flowchart TD
+    S([Enfermeiro])
     
-    process P2_1 as 2.1<br/>Recolha de Sinais Vitais
-    process P2_2 as 2.2<br/>Lógica Manchester
-    process P2_3 as 2.3<br/>Atribuição de Fila
+    P2_1{2.1 Recolha Sinais Vitais}
+    P2_2{2.2 Lógica Manchester}
+    P2_3{2.3 Atribuição de Fila}
 
-    storage D2 as [DB] Episódios
-    storage D3 as [DB] Triagens
+    D2[(DB: Episódios)]
+    D3[(DB: Triagens)]
 
-    S -> P2_1 : TA, Temp, Sintomas
-    P2_1 -> P2_2 : Dados Brutos
-    P2_2 -> D3 : Gravar Cor/Prioridade
-    P2_2 -> P2_3 : Mover para Fila
-    P2_3 -> S : Próximo Utente
+    S --> P2_1
+    P2_1 --- D2
+    P2_1 --> P2_2
+    P2_2 --- D3
+    P2_2 --> P2_3
+    P2_3 --> S
 ```
 
 ### 3.3. Analytics e AI (Processo 3.0)
 Utilização de Machine Learning (Random Forest) para análise de afluência.
 
 ```mermaid
-dfd2
-    entity AD as Admin
-    process P3_1 as 3.1<br/>Extração e Preparação
-    process P3_2 as 3.2<br/>Treino do Modelo AI
-    process P3_3 as 3.3<br/>Geração de Previsões
+flowchart TD
+    AD([Administrador])
+    P3_1{3.1 Extração e Preparação}
+    P3_2{3.2 Treino do Modelo AI}
+    P3_3{3.3 Geração Previsões}
 
-    storage D_HIST as [DB] Histórico Episódios
+    D_HIST[(DB: Histórico)]
 
-    D_HIST -> P3_1 : Dados Temporais
-    P3_1 -> P3_2 : Dataset Processado
-    P3_2 -> P3_3 : Modelo Treinado
-    P3_3 -> AD : Dashboards (MAE, R2, Gráficos)
+    D_HIST --> P3_1
+    P3_1 --> P3_2
+    P3_2 --> P3_3
+    P3_3 --> AD
 ```
 
 ---

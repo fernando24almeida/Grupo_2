@@ -72,6 +72,10 @@ const Admin = () => {
   // Limpar mensagens ao mudar de aba
   useEffect(() => {
     setMensagem({ tipo: '', texto: '' });
+    // Refresh data when switching back to main tabs that show live data
+    if (activeTab === 'active_flow' || activeTab === 'utentes' || activeTab === 'users') {
+      fetchData();
+    }
   }, [activeTab]);
 
   // Filtros
@@ -206,17 +210,24 @@ const Admin = () => {
 
   const criarUtenteApp = async (e) => {
     e.preventDefault();
+
+    // Validação básica
+    if (!uNum || !uNome || !uEmail) {
+      setMensagem({ tipo: 'error', texto: 'Nº Utente, Nome e E-mail são obrigatórios.' });
+      return;
+    }
+
     try {
       await axios.post('/clinical/utentes', {
         num_utente: parseInt(uNum),
         nome: uNome,
         email: uEmail,
-        telemovel: uTel,
-        morada: uMorada,
-        localidade: uLocalidade,
-        sexo: uSexo,
-        data_nascimento: uDataNasc,
-        parentesco: uParentesco
+        telemovel: uTel || null,
+        morada: uMorada || null,
+        localidade: uLocalidade || null,
+        sexo: uSexo || "M",
+        data_nascimento: uDataNasc || null,
+        parentesco: uParentesco || null
       });
       setMensagem({ tipo: 'success', texto: `Utente ${uNome} registado!` });
       setUNome(''); setUEmail(''); setUNum(''); setUTel('');

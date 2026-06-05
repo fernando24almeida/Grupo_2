@@ -1,111 +1,98 @@
+from jose import JWTError, jwt
 from passlib.context import CryptContext
 from datetime import datetime, timedelta, timezone
-from jose import jwt, JWTError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session, select
-from .config import configuracoes
+from typing import List, Optional
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+from .config import configuracoes
+from .db import obter_sessao
+from ..models.models import Utilizador, PapelUtilizador
+
+# =============================================================================
+# MÓDULO DE SEGURANÇA (AUTENTICAÇÃO E ENCRIPTAÇÃO)
+# 
+# EXPLICAÇÃO PARA ALUNOS:
+# Este ficheiro é o 'segurança' à porta do hospital. Ele trata de duas coisas:
+# 1. Palavras-passe: Nunca as guardamos como texto (usamos um 'hash', que é uma 
+#    impressão digital da password).
+# 2. Tokens (JWT): Quando fazes login, recebes um 'passe' (token) que diz quem 
+#    és e o que podes fazer, para não teres de pôr a pass em cada clique.
+# =============================================================================
+
+# Configuração para transformar passwords em 'impressões digitais' seguras
+contexto_pass = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Onde a API vai buscar o token no navegador
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
-def verificar_palavra_passe(palavra_passe_plana, hash_palavra_passe):
-    return pwd_context.verify(palavra_passe_plana, hash_palavra_passe)
+def verificar_palavra_passe(palavra_passe_plana, palavra_passe_hash):
+    """ Verifica se a pass que o utilizador escreveu bate certo com o hash na BD. """
+    return contexto_pass.verify(palavra_passe_plana, palavra_passe_hash)
 
 def obter_hash_palavra_passe(palavra_passe):
-    return pwd_context.hash(palavra_passe)
+    """ Transforma uma password normal num código secreto (hash) para guardar na BD. """
+    return contexto_pass.hash(palavra_passe)
 
-def criar_token_acesso(dados: dict, expira_delta: timedelta = None):
-    para_codificar = dados.copy()
-    if expira_delta:
-        expira = datetime.now(timezone.utc) + expira_delta
-    else:
-        expira = datetime.now(timezone.utc) + timedelta(minutes=configuracoes.ACCESS_TOKEN_EXPIRE_MINUTES)
-    para_codificar.update({"exp": expira})
-    jwt_codificado = jwt.encode(para_codificar, configuracoes.SECRET_KEY, algorithm=configuracoes.ALGORITHM)
-    return jwt_codificado
+def criar_token_acesso(dados: dict):
+    """ 
+    Cria o 'cartão de acesso' (JWT). 
+    Guarda o nome do utilizador e quando é que o cartão expira.
+    """
+    dados_copia = dados.copy()
+    expira = datetime.now(timezone.utc) + timedelta(minutes=configuracoes.ACCESS_TOKEN_EXPIRE_MINUTES)
+    dados_copia.update({"exp": expira})
+    return jwt.encode(dados_copia, configuracoes.SECRET_KEY, algorithm=configuracoes.ALGORITHM)
 
-def obter_utilizador_atual(token: str = Depends(oauth2_scheme)):
-    # Importação local para evitar erro circular
-    from .db import motor
-    from ..models.models import Utilizador, Utente
-    from sqlmodel import Session, select
-
-    credentials_exception = HTTPException(
+async def obter_utilizador_atual(token: str = Depends(oauth2_scheme), sessao: Session = Depends(obter_sessao)):
+    """
+    Esta função corre em quase todas as rotas. Ela lê o token do utilizador, 
+    verifica se é válido e vai à base de dados buscar quem ele é.
+    """
+    erro_credenciais = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Não foi possível validar as credenciais",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    
     try:
-        # Descodificar o token
-        payload = jwt.decode(
-            token, 
-            configuracoes.SECRET_KEY, 
-            algorithms=[configuracoes.ALGORITHM],
-            options={"verify_aud": False}
-        )
-        username = payload.get("sub")
+        payload = jwt.decode(token, configuracoes.SECRET_KEY, algorithms=[configuracoes.ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise erro_credenciais
+    except JWTError:
+        raise erro_credenciais
         
-        if not username:
-            raise credentials_exception
+    # Procurar o utilizador (Staff) pelo username
+    utilizador = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == username)).first()
+    
+    # Se não for Staff, procurar por num_utente (Mobile)
+    if not utilizador:
+        from ..models.models import Utente
+        if username.isdigit():
+            utilizador = sessao.get(Utente, int(username))
             
-        print(f"DEBUG AUTH: Decoded username='{username}'")
-        with Session(motor) as sessao:
-            # 1. Tentar encontrar como Staff (Utilizador)
-            query = select(Utilizador).where(Utilizador.nome_utilizador == str(username))
-            staff = sessao.exec(query).first()
-            print(f"DEBUG AUTH: Staff found? {staff is not None}")
-            if staff:
-                from ..models.models import PapelUtilizador
-                papel = sessao.get(PapelUtilizador, staff.id_role)
-                staff.role_name = papel.nome if papel else "USER"
-                sessao.expunge(staff)
-                return staff
-
-            # 2. Tentar encontrar como Utente
-            try:
-                # Pode ser num_utente (int) ou o email (str)
-                if str(username).isdigit():
-                    user_id = int(username)
-                    utente = sessao.get(Utente, user_id)
-                else:
-                    utente = sessao.exec(select(Utente).where(Utente.email == str(username))).first()
-
-                if utente:
-                    from ..models.models import PapelUtilizador
-                    papel = sessao.get(PapelUtilizador, utente.id_role)
-                    utente.role_name = papel.nome if papel else "UTENTE"
-                    sessao.expunge(utente)
-                    return utente
-            except:
-                pass
-
-                
-            raise credentials_exception
-
-    except (JWTError, Exception) as e:
-        print(f"DEBUG AUTH ERROR: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise credentials_exception
+    if utilizador is None:
+        raise erro_credenciais
+        
+    # Adicionar o nome do papel (ADMIN, MEDICO...) para facilitar verificações
+    papel = sessao.get(PapelUtilizador, utilizador.id_role)
+    utilizador.role_name = papel.nome if papel else "USER"
+    
+    return utilizador
 
 class RoleChecker:
-    def __init__(self, allowed_roles: list):
-        self.allowed_roles = allowed_roles
+    """
+    Um 'filtro' que só deixa passar certas pessoas.
+    Exemplo: @router.get(..., dependencies=[Depends(RoleChecker(["ADMIN"]))])
+    """
+    def __init__(self, papeis_permitidos: List[str]):
+        self.papeis_permitidos = papeis_permitidos
 
-    def __call__(self, user = Depends(obter_utilizador_atual)):
-        # COMPORTAMENTO ROBUSTO: Procurar papel na base de dados
-        from ..models.models import PapelUtilizador
-        from .db import motor
-        
-        with Session(motor) as sessao:
-            papel = sessao.get(PapelUtilizador, user.id_role)
-            nome_papel = papel.nome if papel else "USER"
-            
-        if nome_papel not in self.allowed_roles:
+    def __call__(self, utilizador: Utilizador = Depends(obter_utilizador_atual)):
+        if utilizador.role_name not in self.papeis_permitidos:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Você não tem permissão para aceder a este recurso"
+                detail="Não tem permissões suficientes para realizar esta ação."
             )
-        return user
+        return utilizador

@@ -12,13 +12,13 @@ interface AuthApiService {
     @POST("clinical/utentes")
     suspend fun register(@Body request: RegisterRequest): Response<ApiResponse<Utente>>
 
-    @POST("auth/login/mfa")
+    @POST("auth/login/mfa/mobile")
     suspend fun verifyMfa(@Body request: MfaRequest): Response<ApiResponse<LoginResponse>>
 
     @POST("auth/forgot-password")
     suspend fun recoverAccess(@Body request: RecoverRequest): Response<ApiResponse<String>>
 
-    @retrofit2.http.GET("clinical/utentes/{numUtente}/history")
+    @retrofit2.http.GET("clinical/utentes/{numUtente}/history/mobile")
     suspend fun getHistory(@retrofit2.http.Path("numUtente") numUtente: String): Response<ApiResponse<List<UrgenciaHistory>>>
 
     @retrofit2.http.GET("clinical/episodes")

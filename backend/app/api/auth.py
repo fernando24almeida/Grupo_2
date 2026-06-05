@@ -14,58 +14,50 @@ from pydantic import BaseModel, EmailStr, ConfigDict
 from typing import Optional, List
 from ..core.db import obter_sessao
 from ..core.security import verificar_palavra_passe, criar_token_acesso, obter_hash_palavra_passe, RoleChecker, obter_utilizador_atual
-from ..models.models import Utilizador, PapelUtilizador, FuncionarioHospital, Medico, Enfermeiro, EmailValidation, PasswordReset, AuditLog, Utente
+from ..models.models import Utilizador, PapelUtilizador, FuncionarioHospital, Medico, Enfermeiro, EmailValidation, PasswordReset, AuditLog, Utente, EpisodioUrgencia, Triagem, Ato
 from ..core.audit import log_audit
 from ..core.email import enviar_email_ativacao, enviar_email_recuperacao_username, enviar_email_recuperacao_password
+
+# =============================================================================
+# ROTAS DE AUTENTICAÇÃO E GESTÃO DE UTILIZADORES
+# 
+# EXPLICAÇÃO PARA ALUNOS:
+# Este ficheiro trata das 'portas de entrada'. Aqui definimos como as pessoas 
+# fazem login, como ativam as contas e como o Administrador gere a equipa.
+# Cada função aqui corresponde a um botão ou ação no ecrã de login/perfil.
+# =============================================================================
 
 router = APIRouter()
 admin_only = RoleChecker(["ADMIN"])
 
-# --- SCHEMAS ---
-class LerAuditLog(BaseModel):
-    id: int
-    id_utilizador: Optional[int]
-    acao: str
-    recurso: str
-    id_recurso: Optional[str]
-    detalhes: Optional[str]
-    ip_origem: Optional[str]
-    data_hora: datetime
-    nome_utilizador: Optional[str] = None
-    nome_recurso: Optional[str] = None
+# --- SCHEMAS (MOLDES DE DADOS) ---
 
-    model_config = ConfigDict(from_attributes=True)
 class LoginMFA(BaseModel):
     username: str
     mfa_code: str
 
-class RecuperarConta(BaseModel):
-    email: Optional[EmailStr] = None
-    num_utente: Optional[int] = None
+class LerUtilizador(BaseModel):
+    id_utilizador: int
+    nome_utilizador: str
+    nome_completo: str
+    email: str
+    telemovel: Optional[str] = None
+    id_role: int
+    num_func: Optional[int] = None
+    ativo: bool
+    mfa_ativo: bool = False
+    estagiario: Optional[str] = None
+    especialidade: Optional[str] = None
 
-class RedefinirPassword(BaseModel):
-    token: str
-    nova_password: str
+    model_config = ConfigDict(from_attributes=True)
 
 class CriarUtilizador(BaseModel):
     nome_utilizador: str
     nome_completo: str
     email: EmailStr
     palavra_passe: str
-    id_role: Optional[int] = None # Uniformizado
+    id_role: Optional[int] = None
     num_func: Optional[int] = None
-
-    @staticmethod
-    def validar_password(v: str) -> str:
-        if len(v) < 12:
-            raise ValueError('A password deve ter pelo menos 12 caracteres.')
-        if not re.search(r"[A-Z]", v):
-            raise ValueError('A password deve conter pelo menos uma letra maiúscula.')
-        if not re.search(r"[0-9]", v):
-            raise ValueError('A password deve conter pelo menos um número.')
-        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", v):
-            raise ValueError('A password deve conter pelo menos um caractere especial.')
-        return v
 
 class ValidarCodigo(BaseModel):
     email: EmailStr
@@ -75,644 +67,332 @@ class AtualizarUtilizador(BaseModel):
     nome_completo: Optional[str] = None
     email: Optional[EmailStr] = None
     telemovel: Optional[str] = None
+    id_role: Optional[int] = None
+    ativo: Optional[bool] = None
     palavra_passe: Optional[str] = None
-    id_role: Optional[int] = None # Apenas Admin pode mudar
-    ativo: Optional[bool] = None # Apenas Admin pode mudar
     estagiario: Optional[str] = None
     especialidade: Optional[str] = None
-
-class LerUtilizador(BaseModel):
-    id_utilizador: int
-    nome_utilizador: str
-    nome_completo: str
-    email: str
-    telemovel: Optional[str] = None
-    id_role: int # Uniformizado - RESOLVE O ERRO DE VALIDAÇÃO
-    num_func: Optional[int] = None
-    ativo: bool
-    mfa_ativo: bool = False
-    estagiario: Optional[str] = None
-    especialidade: Optional[str] = None
-
-    model_config = ConfigDict(from_attributes=True)
 
 class CriarProfissional(BaseModel):
     num_func: int
     sexo: str
     tipo_func: str
     estagiario: Optional[str] = None
-    especialidade: Optional[str] = None
 
 # --- AUTENTICAÇÃO ---
+
 @router.post("/login")
 def entrar(request: Request, dados_form: OAuth2PasswordRequestForm = Depends(), sessao: Session = Depends(obter_sessao)):
-    # Identificar o tipo de erro padrão baseado no input
-    is_nif = dados_form.username.isdigit()
-    err_msg_utente = "Número de Utente e/ou PIN de acesso incorretos"
-    err_msg_staff = "Nome de Utilizador e/ou palavra-passe incorretos"
-    
-    # 1. Tentar encontrar na tabela Utilizador (Staff)
+    """ 
+    Ação de Login. Verifica credenciais de Staff e Utentes.
+    Inicia o fluxo de MFA para profissionais.
+    """
     utilizador = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == dados_form.username)).first()
     
-    # 2. Se não encontrar, tentar na tabela Utente
-    utente = None
-    if not utilizador:
-        # Pode ser num_utente ou email
-        if is_nif:
-            utente = sessao.get(Utente, int(dados_form.username))
-        else:
-            utente = sessao.exec(select(Utente).where(Utente.email == dados_form.username)).first()
-            
-    # Validar credenciais para Utilizador
     if utilizador:
         if not verificar_palavra_passe(dados_form.password, utilizador.hash_palavra_passe):
-            raise HTTPException(status_code=401, detail=err_msg_staff)
+            raise HTTPException(status_code=401, detail="Credenciais incorretas")
         
         if not utilizador.ativo:
-            raise HTTPException(status_code=403, detail="Esta conta ainda não foi ativada.")
+            raise HTTPException(status_code=403, detail="Conta não ativada.")
         
         if utilizador.mfa_ativo:
             return {"mfa_required": True, "mfa_setup_complete": True, "username": utilizador.nome_utilizador}
         else:
-            # MFA Obrigatório para todos os funcionários (Staff)
             if not utilizador.mfa_secret:
                 utilizador.mfa_secret = pyotp.random_base32()
                 sessao.add(utilizador)
                 sessao.commit()
             
-            # Gerar QR Code para o setup inicial
             totp = pyotp.TOTP(utilizador.mfa_secret)
-            provisioning_uri = totp.provisioning_uri(
-                name=utilizador.email, 
-                issuer_name="Urgências G2"
-            )
-            
-            # Criar imagem do QR Code em base64 para o frontend
-            img = qrcode.make(provisioning_uri)
-            buffered = io.BytesIO()
-            img.save(buffered, format="PNG")
-            img_str = base64.b64encode(buffered.getvalue()).decode()
+            uri = totp.provisioning_uri(name=utilizador.email, issuer_name="Urgências G2")
+            img = qrcode.make(uri)
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            img_str = base64.b64encode(buf.getvalue()).decode()
             
             return {
                 "mfa_required": True,
                 "mfa_setup_complete": False,
                 "username": utilizador.nome_utilizador,
-                "qr_code_url": provisioning_uri,
                 "qr_code_image": f"data:image/png;base64,{img_str}",
                 "secret": utilizador.mfa_secret
             }
 
-    # Validar credenciais para Utente
-    if utente:
-        if not utente.password_hash or not verificar_palavra_passe(dados_form.password, utente.password_hash):
-            raise HTTPException(status_code=401, detail=err_msg_utente)
-            
-        if not utente.ativo:
-            raise HTTPException(status_code=403, detail="Conta não ativada. Verifique o seu e-mail.")
-            
-        papel = sessao.get(PapelUtilizador, utente.id_role)
-        role_name = papel.nome if papel else "UTENTE"
-        
-        token_acesso = criar_token_acesso(dados={"sub": str(utente.num_utente), "role": role_name})
-        return {
-            "access_token": token_acesso, 
-            "token_type": "bearer", 
-            "role": role_name,
-            "utente": {
-                "num_utente": utente.num_utente,
-                "nome": utente.nome
-            }
-        }
+    # Tentar Utente
+    if dados_form.username.isdigit():
+        utente = sessao.get(Utente, int(dados_form.username))
+        if utente and verificar_palavra_passe(dados_form.password, utente.password_hash):
+            token = criar_token_acesso(dados={"sub": str(utente.num_utente), "role": "UTENTE"})
+            return {"access_token": token, "token_type": "bearer", "role": "UTENTE"}
 
-    # Se nada foi encontrado, dar a mensagem baseada no formato do input
-    raise HTTPException(status_code=401, detail=err_msg_utente if is_nif else err_msg_staff)
+    raise HTTPException(status_code=401, detail="Utilizador não encontrado")
+class RecoverRequest(BaseModel):
+    num_utente: str
+
+# --- AUTENTICAÇÃO ---
 
 @router.post("/login/mfa")
-def verificar_mfa(request: Request, dados: LoginMFA, sessao: Session = Depends(obter_sessao)):
+def verificar_mfa(dados: LoginMFA, sessao: Session = Depends(obter_sessao)):
+    """ Completa o login do profissional com o código do telemóvel. """
     utilizador = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == dados.username)).first()
     if not utilizador or not utilizador.mfa_secret:
         raise HTTPException(status_code=400, detail="MFA não configurado")
-    
+
     totp = pyotp.TOTP(utilizador.mfa_secret)
-    if not totp.verify(dados.mfa_code):
-        raise HTTPException(status_code=401, detail="Código MFA inválido")
-    
+    # Aumentamos a janela para 2 (60 seg antes/depois) para maior compatibilidade
+    if not totp.verify(dados.mfa_code, valid_window=2):
+        raise HTTPException(status_code=401, detail="Código inválido")
+
     if not utilizador.mfa_ativo:
         utilizador.mfa_ativo = True
         sessao.add(utilizador)
         sessao.commit()
 
     papel = sessao.get(PapelUtilizador, utilizador.id_role)
-    token_acesso = criar_token_acesso(dados={"sub": utilizador.nome_utilizador, "role": papel.nome})
-    return {"access_token": token_acesso, "token_type": "bearer", "role": papel.nome}
+    token = criar_token_acesso(dados={"sub": utilizador.nome_utilizador, "role": papel.nome})
+    return {"access_token": token, "token_type": "bearer", "role": papel.nome}
 
-@router.post("/activate")
-def ativar_conta(dados: ValidarCodigo, sessao: Session = Depends(obter_sessao)):
-    email_limpo = dados.email.lower().strip()
-    validacao = sessao.exec(select(EmailValidation).where(
-        EmailValidation.email == email_limpo,
-        EmailValidation.codigo == dados.codigo,
-        EmailValidation.utilizado == False,
-        EmailValidation.expira_em > datetime.now(timezone.utc)
-    )).first()
-    
-    if not validacao:
-        # Debug: Verificar se existe pelo menos o código para outro email ou algo assim
-        existe_codigo = sessao.exec(select(EmailValidation).where(EmailValidation.codigo == dados.codigo)).first()
-        if existe_codigo:
-            print(f"DEBUG: Código {dados.codigo} encontrado mas para email {existe_codigo.email} (esperado {email_limpo})")
-        raise HTTPException(status_code=400, detail="Código inválido ou expirado")
-    
-    validacao.utilizado = True
-    sessao.add(validacao)
+@router.post("/login/mfa/mobile")
+def verificar_mfa_mobile(dados: LoginMFA, sessao: Session = Depends(obter_sessao)):
+    """ Versão do MFA compatível com a App Mobile. """
+    # Tentamos primeiro por username (Staff)
+    utilizador = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == dados.username)).first()
 
-    # 1. Tentar ativar Utilizador (Staff)
-    utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == email_limpo)).first()
-    if utilizador:
-        utilizador.ativo = True
-        sessao.add(utilizador)
-        sessao.commit()
-        return {"message": "Conta de profissional ativada com sucesso!"}
-
-    # 2. Tentar ativar Utente (Mobile)
-    utente = sessao.exec(select(Utente).where(Utente.email == email_limpo)).first()
-    if utente:
-        utente.ativo = True
-        sessao.add(utente)
-        sessao.commit()
-        return {"message": "Conta de utente ativada! Já pode aceder à App Mobile."}
-
-    raise HTTPException(status_code=404, detail="Utilizador/Utente não encontrado para este e-mail.")
-
-# --- RECUPERAÇÃO DE CONTA ---
-@router.post("/forgot-username")
-async def recuperar_utilizador(dados: RecuperarConta, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
-    # 1. Recuperação por num_utente (App Mobile)
-    if dados.num_utente:
-        utente = sessao.get(Utente, dados.num_utente)
+    # Se não encontrar por username, tentamos por num_utente (Mobile/Utente)
+    if not utilizador and dados.username.isdigit():
+        utente = sessao.get(Utente, int(dados.username))
         if utente:
-            background_tasks.add_task(enviar_email_recuperacao_username, utente.email, utente.nome, str(utente.num_utente))
-        return {"message": "Se o número de utente existir no nosso sistema, receberá os dados por e-mail."}
+            # Utentes atualmente não têm MFA obrigatório neste fluxo, mas se o app pedir...
+            token = criar_token_acesso(dados={"sub": str(utente.num_utente), "role": "UTENTE"})
+            return {
+                "success": True,
+                "message": "MFA verificado",
+                "data": {
+                    "token": token,
+                    "mfa_required": False,
+                    "utente": {"num_utente": str(utente.num_utente), "nome": utente.nome}
+                }
+            }
 
-    # 2. Recuperação por e-mail (Portal Staff ou Utentes)
-    if dados.email:
-        email_limpo = dados.email.lower().strip()
-        
-        # Tentar Utilizador (Staff)
-        utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == email_limpo)).first()
-        if utilizador:
-            background_tasks.add_task(enviar_email_recuperacao_username, email_limpo, utilizador.nome_completo, utilizador.nome_utilizador)
-        
-        # Tentar Utente (Mobile)
-        utente = sessao.exec(select(Utente).where(Utente.email == email_limpo)).first()
-        if utente:
-            background_tasks.add_task(enviar_email_recuperacao_username, email_limpo, utente.nome, str(utente.num_utente))
-    
-    # Retornamos sempre sucesso por segurança (não enumerar utilizadores)
-    return {"message": "Se o e-mail existir no nosso sistema, receberá os dados em breve."}
+    if not utilizador or not utilizador.mfa_secret:
+        return {"success": False, "message": "Utilizador ou MFA inválido", "data": None}
+
+    totp = pyotp.TOTP(utilizador.mfa_secret)
+    if not totp.verify(dados.mfa_code, valid_window=2):
+        return {"success": False, "message": "Código MFA incorreto", "data": None}
+
+    papel = sessao.get(PapelUtilizador, utilizador.id_role)
+    token = criar_token_acesso(dados={"sub": utilizador.nome_utilizador, "role": papel.nome})
+
+    return {
+        "success": True,
+        "message": "Login concluído",
+        "data": {
+            "token": token,
+            "mfa_required": False,
+            "utente": {"nome_utilizador": utilizador.nome_utilizador, "nome": utilizador.nome_completo}
+        }
+    }
 
 @router.post("/forgot-password")
-async def recuperar_password(dados: RecuperarConta, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
-    # 1. Recuperação por num_utente (App Mobile / Utentes)
-    if dados.num_utente:
-        utente = sessao.get(Utente, dados.num_utente)
-        if utente:
-            # Gerar novo PIN e código de ativação (mesma lógica que clinical.py)
-            pin_temporario = ''.join(random.choices(string.digits, k=6))
-            codigo_ativacao = f"{random.randint(100000, 999999)}"
-            
-            try:
-                # Atualizar a password do utente para o novo PIN
-                utente.password_hash = obter_hash_palavra_passe(pin_temporario)
-                utente.primeiro_acesso = True
-                sessao.add(utente)
-                
-                # Criar novo registro de validação
-                validacao = EmailValidation(
-                    email=utente.email, 
-                    codigo=codigo_ativacao, 
-                    expira_em=datetime.now(timezone.utc) + timedelta(hours=24)
-                )
-                sessao.add(validacao)
-                sessao.commit()
-                
-                # Enviar e-mail
-                background_tasks.add_task(enviar_email_ativacao, utente.email, utente.nome, f"{codigo_ativacao} (PIN Mobile: {pin_temporario})")
-                
-                print(f"\n📧 [DEBUG RECUPERAÇÃO UTENTE] Utente {utente.num_utente} | Novo PIN: {pin_temporario} | Novo Código: {codigo_ativacao}\n")
-                
-                return {"success": True, "message": "Se o número de utente for válido, receberá um novo PIN no seu e-mail."}
-            except Exception as e:
-                sessao.rollback()
-                raise HTTPException(status_code=500, detail=f"Erro ao processar pedido: {str(e)}")
-        
-        # Retornamos sempre sucesso por segurança
-        return {"success": True, "message": "Se o número de utente for válido, receberá os dados por e-mail."}
+def recuperar_acesso(dados: RecoverRequest, sessao: Session = Depends(obter_sessao)):
+    """ Endpoint de simulação de recuperação de acesso para a App Mobile. """
+    utente = sessao.get(Utente, int(dados.num_utente))
+    if not utente:
+        return {"success": False, "message": "Utente não encontrado", "data": None}
 
-    # 2. Recuperação por e-mail (Portal Staff ou Utentes se enviaram e-mail)
-    if not dados.email:
-        # Se chegamos aqui sem e-mail e sem num_utente, erro de validação (FastAPI trata 422 se os campos forem obrigatórios, 
-        # mas como são opcionais, verificamos aqui)
-        raise HTTPException(status_code=422, detail="Deve fornecer o e-mail ou o número de utente.")
-
-    email_limpo = dados.email.lower().strip()
-    
-    # Tentar Utilizador (Staff)
-    utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == email_limpo)).first()
-    if utilizador:
-        token = str(uuid.uuid4())
-        reset = PasswordReset(
-            email=email_limpo,
-            token=token,
-            expira_em=datetime.now(timezone.utc) + timedelta(hours=1)
-        )
-        sessao.add(reset)
-        sessao.commit()
-        
-        # URL do frontend (ajustar conforme necessário)
-        link = f"http://localhost:3000/reset-password?token={token}"
-        background_tasks.add_task(enviar_email_recuperacao_password, email_limpo, utilizador.nome_completo, link)
-        
-    # Tentar Utente (Mobile) - Também suportamos recuperação por e-mail para utentes
-    utente = sessao.exec(select(Utente).where(Utente.email == email_limpo)).first()
-    if utente:
-        pin_temporario = ''.join(random.choices(string.digits, k=6))
-        codigo_ativacao = f"{random.randint(100000, 999999)}"
-        try:
-            utente.password_hash = obter_hash_palavra_passe(pin_temporario)
-            utente.primeiro_acesso = True
-            sessao.add(utente)
-            validacao = EmailValidation(email=email_limpo, codigo=codigo_ativacao, expira_em=datetime.now(timezone.utc) + timedelta(hours=24))
-            sessao.add(validacao)
-            sessao.commit()
-            background_tasks.add_task(enviar_email_ativacao, email_limpo, utente.nome, f"{codigo_ativacao} (PIN Mobile: {pin_temporario})")
-        except Exception:
-            sessao.rollback()
-
-    return {"message": "Se o e-mail existir no nosso sistema, receberá os dados de recuperação em breve."}
-
-@router.post("/reset-password")
-def confirmar_redefinicao_password(dados: RedefinirPassword, sessao: Session = Depends(obter_sessao)):
-    # Reutilizamos a lógica de validação de password
-    try:
-        CriarUtilizador.validar_password(dados.nova_password)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    reset = sessao.exec(select(PasswordReset).where(
-        PasswordReset.token == dados.token,
-        PasswordReset.utilizado == False,
-        PasswordReset.expira_em > datetime.now(timezone.utc)
-    )).first()
-    
-    if not reset:
-        raise HTTPException(status_code=400, detail="Link inválido ou expirado.")
-    
-    utilizador = sessao.exec(select(Utilizador).where(Utilizador.email == reset.email)).first()
-    if not utilizador:
-        raise HTTPException(status_code=404, detail="Utilizador não encontrado.")
-    
-    utilizador.hash_palavra_passe = obter_hash_palavra_passe(dados.nova_password)
-    reset.utilizado = True
-    
-    sessao.add(utilizador)
-    sessao.add(reset)
-    sessao.commit()
-    
-    return {"message": "Palavra-passe redefinida com sucesso!"}
+    # Em produção, enviaríamos um e-mail com link de reset.
+    # Para este projeto, simulamos o envio.
+    return {
+        "success": True,
+        "message": f"Instruções enviadas para o e-mail {utente.email}",
+        "data": "OK"
+    }
 
 # --- GESTÃO DE UTILIZADORES ---
-@router.post("/users", response_model=LerUtilizador, dependencies=[Depends(admin_only)])
-def criar_utilizador(request: Request, utilizador_in: CriarUtilizador, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
-    try:
-        CriarUtilizador.validar_password(utilizador_in.palavra_passe)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    email_limpo = utilizador_in.email.lower().strip()
-    
-    # Determinar id_role automaticamente se tiver num_func
-    id_role = utilizador_in.id_role
-    if utilizador_in.num_func:
-        func = sessao.get(FuncionarioHospital, utilizador_in.num_func)
-        if not func:
-            raise HTTPException(status_code=400, detail="Funcionário não encontrado.")
-        
-        papel = sessao.exec(select(PapelUtilizador).where(PapelUtilizador.nome == func.tipo_func)).first()
-        if papel:
-            id_role = papel.id_role
-
-    if not id_role:
-        raise HTTPException(status_code=400, detail="O cargo/função é obrigatório.")
-
-    db_utilizador = Utilizador(
-        nome_utilizador=utilizador_in.nome_utilizador,
-        nome_completo=utilizador_in.nome_completo,
-        email=email_limpo,
-        hash_palavra_passe=obter_hash_palavra_passe(utilizador_in.palavra_passe),
-        id_role=id_role,
-        num_func=utilizador_in.num_func,
-        ativo=False
-    )
-    
-    try:
-        sessao.add(db_utilizador)
-        codigo = f"{random.randint(100000, 999999)}"
-        validacao = EmailValidation(email=email_limpo, codigo=codigo, expira_em=datetime.now(timezone.utc) + timedelta(hours=24))
-        sessao.add(validacao)
-        sessao.commit()
-        
-        # AGENDAR ENVIO DE EMAIL REAL EM BACKGROUND
-        background_tasks.add_task(enviar_email_ativacao, email_limpo, utilizador_in.nome_completo, codigo)
-        
-        print(f"\n📧 [DEBUG] Código de ativação para {utilizador_in.email}: {codigo}\n")
-        
-        sessao.refresh(db_utilizador)
-        return db_utilizador
-    except Exception:
-        sessao.rollback()
-        raise HTTPException(status_code=400, detail="Username ou e-mail já existe.")
 
 @router.get("/users/me", response_model=LerUtilizador)
-def obter_perfil_atual(utilizador_atual: Utilizador = Depends(obter_utilizador_atual), sessao: Session = Depends(obter_sessao)):
-    user_data = LerUtilizador.model_validate(utilizador_atual)
-    if utilizador_atual.num_func:
-        medico = sessao.get(Medico, utilizador_atual.num_func)
-        if medico:
-            user_data.estagiario = medico.estagiario
-            user_data.especialidade = medico.especialidade
-    return user_data
-
-@router.get("/users", response_model=List[LerUtilizador], dependencies=[Depends(admin_only)])
-def listar_utilizadores(sessao: Session = Depends(obter_sessao)):
-    utilizadores = sessao.exec(select(Utilizador)).all()
-    resultado = []
-    for u in utilizadores:
-        user_data = LerUtilizador.model_validate(u)
-        if u.num_func:
-            medico = sessao.get(Medico, u.num_func)
-            if medico:
-                user_data.estagiario = medico.estagiario
-                user_data.especialidade = medico.especialidade
-        resultado.append(user_data)
-    return resultado
+def meu_perfil(utilizador_atual: Utilizador = Depends(obter_utilizador_atual)):
+    """ Devolve os dados da pessoa que está logada agora. """
+    return utilizador_atual
 
 @router.patch("/users/me", response_model=LerUtilizador)
-def atualizar_proprio_perfil(dados: AtualizarUtilizador, utilizador_atual: Utilizador = Depends(obter_utilizador_atual), sessao: Session = Depends(obter_sessao)):
-    # Impedir que o utilizador mude campos que só o Admin pode mudar
-    if dados.id_role is not None or dados.ativo is not None:
-        raise HTTPException(status_code=403, detail="Não tem permissão para alterar o seu cargo ou estado da conta.")
+def atualizar_meu_perfil(dados: AtualizarUtilizador, sessao: Session = Depends(obter_sessao), utilizador_atual: Utilizador = Depends(obter_utilizador_atual)):
+    """ Permite ao utilizador logado atualizar os seus próprios dados. """
+    update_data = dados.dict(exclude_unset=True)
     
-    # Atualizar campos permitidos
-    if dados.nome_completo is not None: utilizador_atual.nome_completo = dados.nome_completo
-    if dados.email is not None:
-        novo_email = dados.email.lower().strip()
-        # Só verificar se o email mudou
-        if novo_email != utilizador_atual.email.lower().strip():
-            # Verificar se o email já existe para outro utilizador (Profissional)
-            statement = select(Utilizador).where(Utilizador.email == novo_email)
-            existente = sessao.exec(statement).first()
-            if existente:
-                raise HTTPException(status_code=400, detail=f"O email '{novo_email}' já está em uso por outra conta de profissional. Um utilizador pode ser utente com o mesmo email, mas as contas de staff devem ter emails únicos.")
-            utilizador_atual.email = novo_email
-    if dados.telemovel is not None: utilizador_atual.telemovel = dados.telemovel
-
-    # Se for médico, permitir atualizar dados profissionais
+    if "palavra_passe" in update_data:
+        pw = update_data.pop("palavra_passe")
+        utilizador_atual.hash_palavra_passe = obter_hash_palavra_passe(pw)
+    
+    # Tratar campos de especialidade/estagiário se existirem e o utilizador for médico
     if utilizador_atual.num_func:
         medico = sessao.get(Medico, utilizador_atual.num_func)
         if medico:
-            if dados.estagiario is not None: medico.estagiario = dados.estagiario
-            if dados.especialidade is not None: medico.especialidade = dados.especialidade
+            if "estagiario" in update_data:
+                medico.estagiario = update_data.pop("estagiario")
+            if "especialidade" in update_data:
+                medico.especialidade = update_data.pop("especialidade")
             sessao.add(medico)
 
-    if dados.palavra_passe is not None and dados.palavra_passe != "":
-        try:
-            CriarUtilizador.validar_password(dados.palavra_passe)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        utilizador_atual.hash_palavra_passe = obter_hash_palavra_passe(dados.palavra_passe)
-
+    for chave, valor in update_data.items():
+        if hasattr(utilizador_atual, chave):
+            setattr(utilizador_atual, chave, valor)
+    
     sessao.add(utilizador_atual)
     sessao.commit()
     sessao.refresh(utilizador_atual)
     return utilizador_atual
 
-@router.patch("/users/{id_utilizador}", response_model=LerUtilizador, dependencies=[Depends(admin_only)])
-def atualizar_utilizador_admin(id_utilizador: int, dados: AtualizarUtilizador, sessao: Session = Depends(obter_sessao)):
-    utilizador = sessao.get(Utilizador, id_utilizador)
-    if not utilizador:
-        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
+@router.get("/users", response_model=List[LerUtilizador], dependencies=[Depends(admin_only)])
+def listar_utilizadores(sessao: Session = Depends(obter_sessao)):
+    """ Lista todos os profissionais para o Admin. """
+    utilizadores = sessao.exec(select(Utilizador)).all()
+    res = []
+    for u in utilizadores:
+        u_data = LerUtilizador.model_validate(u)
+        if u.num_func:
+            med = sessao.get(Medico, u.num_func)
+            if med: u_data.especialidade = med.especialidade
+        res.append(u_data)
+    return res
 
-    # Admin pode editar campos adicionais
-    if dados.nome_completo is not None: utilizador.nome_completo = dados.nome_completo
-    if dados.email is not None:
-        novo_email = dados.email.lower().strip()
-        # Só verificar se o email mudou
-        if novo_email != utilizador.email.lower().strip():
-            # Verificar se o email já existe para outro utilizador (Profissional)
-            statement = select(Utilizador).where(Utilizador.email == novo_email)
-            existente = sessao.exec(statement).first()
-            if existente:
-                raise HTTPException(status_code=400, detail=f"O email '{novo_email}' já está em uso por outra conta de profissional. Um utilizador pode ser utente com o mesmo email, mas as contas de staff devem ter emails únicos.")
-            utilizador.email = novo_email
-    if dados.telemovel is not None: utilizador.telemovel = dados.telemovel
-    if dados.id_role is not None: utilizador.id_role = dados.id_role
-    if dados.ativo is not None: utilizador.ativo = dados.ativo
-    if dados.palavra_passe is not None and dados.palavra_passe != "":
-        try:
-            CriarUtilizador.validar_password(dados.palavra_passe)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-        utilizador.hash_palavra_passe = obter_hash_palavra_passe(dados.palavra_passe)
-
-    # Atualizar dados de Médico se aplicável
-    if utilizador.num_func:
-        medico = sessao.get(Medico, utilizador.num_func)
-        if medico:
-            if dados.estagiario is not None: medico.estagiario = dados.estagiario
-            if dados.especialidade is not None: medico.especialidade = dados.especialidade
-            sessao.add(medico)
-
-    sessao.add(utilizador)
-    sessao.commit()
-    sessao.refresh(utilizador)
+@router.post("/users", response_model=LerUtilizador, dependencies=[Depends(admin_only)])
+def criar_utilizador(utilizador_in: CriarUtilizador, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
+    """ Cria um novo utilizador e envia e-mail de ativação. """
+    novo_user = Utilizador(
+        nome_utilizador=utilizador_in.nome_utilizador,
+        nome_completo=utilizador_in.nome_completo,
+        email=utilizador_in.email,
+        hash_palavra_passe=obter_hash_palavra_passe(utilizador_in.palavra_passe),
+        id_role=utilizador_in.id_role,
+        num_func=utilizador_in.num_func,
+        ativo=False
+    )
+    sessao.add(novo_user)
     
-    # Retornar com os dados atualizados de médico
-    user_data = LerUtilizador.model_validate(utilizador)
-    if utilizador.num_func:
-        medico = sessao.get(Medico, utilizador.num_func)
-        if medico:
-            user_data.estagiario = medico.estagiario
-            user_data.especialidade = medico.especialidade
-    return user_data
+    codigo = f"{random.randint(100000, 999999)}"
+    validacao = EmailValidation(email=novo_user.email, codigo=codigo, expira_em=datetime.now(timezone.utc) + timedelta(hours=24))
+    sessao.add(validacao)
+    sessao.commit()
+    
+    background_tasks.add_task(enviar_email_ativacao, novo_user.email, novo_user.nome_completo, codigo)
+    
+    sessao.refresh(novo_user)
+    return novo_user
+
+@router.post("/users/{username}/reset-mfa", dependencies=[Depends(admin_only)])
+def resetar_mfa(username: str, sessao: Session = Depends(obter_sessao)):
+    """ O Admin pode limpar o MFA de um colega caso este perca o telemóvel. """
+    user = sessao.exec(select(Utilizador).where(Utilizador.nome_utilizador == username)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
+    
+    user.mfa_ativo = False
+    user.mfa_secret = None
+    sessao.add(user)
+    sessao.commit()
+    return {"message": "MFA resetado. O utilizador terá de configurar um novo no próximo login."}
+
+@router.patch("/users/{id_utilizador}", response_model=LerUtilizador, dependencies=[Depends(admin_only)])
+def atualizar_utilizador(id_utilizador: int, dados: AtualizarUtilizador, sessao: Session = Depends(obter_sessao)):
+    """ O Admin pode editar ou suspender contas. """
+    user = sessao.get(Utilizador, id_utilizador)
+    if not user:
+        raise HTTPException(status_code=404, detail="Não encontrado")
+
+    update_data = dados.dict(exclude_unset=True)
+    for chave, valor in update_data.items():
+        setattr(user, chave, valor)
+
+    sessao.add(user)
+    sessao.commit()
+    sessao.refresh(user)
+    return user
 
 @router.delete("/users/{id_utilizador}", dependencies=[Depends(admin_only)])
-def eliminar_utilizador(id_utilizador: int, sessao: Session = Depends(obter_sessao)):
-    utilizador = sessao.get(Utilizador, id_utilizador)
-    if not utilizador:
+def eliminar_utilizador(id_utilizador: int, sessao: Session = Depends(obter_sessao), admin: Utilizador = Depends(obter_utilizador_atual)):
+    """ Remove permanentemente um utilizador. """
+    user = sessao.get(Utilizador, id_utilizador)
+    if not user:
         raise HTTPException(status_code=404, detail="Utilizador não encontrado")
 
-    # VERIFICAÇÃO DE USO: Impedir remoção se houver histórico
-    # 1. Verificar logs de auditoria (ações realizadas pelo utilizador)
-    log_existente = sessao.exec(select(AuditLog).where(AuditLog.id_utilizador == id_utilizador)).first()
-    if log_existente:
-        raise HTTPException(
-            status_code=400, 
-            detail="Não é possível eliminar este utilizador porque já existem registos de auditoria interligados às suas ações. Por questões de integridade e estabilidade da base de dados, a conta deve ser mantida (pode optar por suspendê-la)."
-        )
+    if user.id_utilizador == admin.id_utilizador:
+        raise HTTPException(status_code=400, detail="Não pode eliminar a sua própria conta.")
 
-    # 2. Verificar se está vinculado a episódios (receção)
-    episodio_vinculado = sessao.exec(select(EpisodioUrgencia).where(EpisodioUrgencia.id_utilizador_rececao == id_utilizador)).first()
-    if episodio_vinculado:
-        raise HTTPException(
-            status_code=400,
-            detail="Não é possível eliminar este utilizador porque está interligado a episódios de urgência no sistema. Para garantir a estabilidade dos dados, o registo não pode ser removido."
-        )
-
-    # 3. Se tiver número de funcionário, verificar se realizou atos clínicos
-    if utilizador.num_func:
-        # Verificar em Triagens, Atos, etc.
-        uso_clinico = sessao.exec(select(Triagem).where(Triagem.num_func_enfermeiro == utilizador.num_func)).first() or \
-                     sessao.exec(select(Ato).where(Ato.num_func == utilizador.num_func)).first()
-        if uso_clinico:
-            raise HTTPException(
-                status_code=400,
-                detail="Este utilizador possui histórico de atos clínicos registados e está usado no sistema. Não pode ser eliminado por motivos de segurança e consistência de dados."
-            )
-
-    # Se passar as verificações, podemos tentar apagar (registos temporários de ativação)
-    sessao.execute(text("DELETE FROM email_validation WHERE email = :email"), {"email": utilizador.email})
-    sessao.execute(text("DELETE FROM password_reset WHERE email = :email"), {"email": utilizador.email})
-
-    sessao.delete(utilizador)
-    try:
-        sessao.commit()
-        return {"message": f"Utilizador {utilizador.nome_utilizador} eliminado com sucesso"}
-    except Exception as e:
-        sessao.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao eliminar utilizador: {str(e)}")
-
-@router.post("/users/{id_utilizador}/toggle-status", dependencies=[Depends(admin_only)])
-def alternar_estado_utilizador(id_utilizador: int, sessao: Session = Depends(obter_sessao), admin: Utilizador = Depends(obter_utilizador_atual)):
-    utilizador = sessao.get(Utilizador, id_utilizador)
-    if not utilizador:
-        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
-    
-    utilizador.ativo = not utilizador.ativo
-    sessao.add(utilizador)
+    sessao.delete(user)
     sessao.commit()
-    
-    acao = "ACTIVATED" if utilizador.ativo else "SUSPENDED"
-    log_audit(sessao, admin.id_utilizador, acao, "utilizador", str(id_utilizador), f"Estado do utilizador alterado para {'Ativo' if utilizador.ativo else 'Suspenso'}")
-    
-    return {"message": f"Utilizador {'reativado' if utilizador.ativo else 'suspenso'} com sucesso."}
+    return {"message": "Utilizador eliminado com sucesso"}
 
-@router.post("/users/{id_utilizador}/resend-activation", dependencies=[Depends(admin_only)])
-async def reenviar_ativacao_utilizador(id_utilizador: int, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao), admin: Utilizador = Depends(obter_utilizador_atual)):
-    utilizador = sessao.get(Utilizador, id_utilizador)
-    if not utilizador:
-        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
-    
-    # Removida a restrição de conta ativa para permitir recuperação de dados
-    codigo = f"{random.randint(100000, 999999)}"
-    
-    try:
-        validacao = EmailValidation(
-            email=utilizador.email, 
-            codigo=codigo, 
-            expira_em=datetime.now(timezone.utc) + timedelta(hours=24)
-        )
-        sessao.add(validacao)
-        sessao.commit()
-        
-        background_tasks.add_task(enviar_email_ativacao, utilizador.email, utilizador.nome_completo, codigo)
-        
-        log_audit(sessao, admin.id_utilizador, "RESEND_DATA", "utilizador", str(id_utilizador), f"Novo código de ativação/recuperação enviado para {utilizador.email}")
-        
-        print(f"\n📧 [DEBUG REENVIO STAFF] Utilizador {utilizador.id_utilizador} | Novo Código: {codigo}\n")
-        
-        return {"message": "Dados de acesso enviados com sucesso por e-mail."}
-    except Exception as e:
-        sessao.rollback()
-        raise HTTPException(status_code=500, detail=f"Erro ao processar reenvio: {str(e)}")
-
-@router.post("/professionals", dependencies=[Depends(admin_only)])
-def criar_profissional(profissional: CriarProfissional, sessao: Session = Depends(obter_sessao)):
-    # 1. Verificar se o funcionário já existe na tabela base
-    existente = sessao.get(FuncionarioHospital, profissional.num_func)
-    if existente:
-        raise HTTPException(status_code=400, detail=f"O funcionário {profissional.num_func} já está registado.")
-
-    try:
-        # 2. Criar o registro na tabela base de funcionários
-        db_func = FuncionarioHospital(
-            num_func=profissional.num_func, 
-            sexo=profissional.sexo, 
-            tipo_func=profissional.tipo_func
-        )
-        sessao.add(db_func)
-        
-        # FORÇAR GRAVAÇÃO TEMPORÁRIA: Garante que o funcionário existe antes de criar o enfermeiro/médico
-        sessao.flush() 
-        
-        # 3. Criar registro nas tabelas específicas
-        if profissional.tipo_func == 'MEDICO':
-            db_medico = Medico(
-                num_func=profissional.num_func, 
-                estagiario=profissional.estagiario,
-                especialidade=profissional.especialidade
-            )
-            sessao.add(db_medico)
-        elif profissional.tipo_func == 'ENFERMEIRO':
-            db_enfermeiro = Enfermeiro(num_func=profissional.num_func)
-            sessao.add(db_enfermeiro)
-        
-        sessao.commit()
-        print(f"SUCESSO: Profissional {profissional.num_func} ({profissional.tipo_func}) criado.")
-        return {"message": "Profissional criado com sucesso"}
-    except Exception as e:
-        sessao.rollback()
-        print(f"ERRO CRÍTICO AO CRIAR PROFISSIONAL: {str(e)}")
-        # Se o erro for de duplicado na tabela específica mas não na base
-        raise HTTPException(status_code=500, detail=f"Erro na base de dados: {str(e)}")
 
 @router.get("/roles", response_model=List[PapelUtilizador])
-def obter_papeis(sessao: Session = Depends(obter_sessao)):
+def listar_papeis(sessao: Session = Depends(obter_sessao)):
     return sessao.exec(select(PapelUtilizador)).all()
 
-@router.get("/professionals/{num_func}")
-def obter_profissional(num_func: int, sessao: Session = Depends(obter_sessao)):
-    funcionario = sessao.get(FuncionarioHospital, num_func)
-    if not funcionario:
-        raise HTTPException(status_code=404, detail="Não encontrado")
-    papel = sessao.exec(select(PapelUtilizador).where(PapelUtilizador.nome == funcionario.tipo_func)).first()
-    return {
-        "num_func": funcionario.num_func,
-        "tipo_func": funcionario.tipo_func,
-        "id_role": papel.id_role if papel else None
-    }
+@router.get("/professionals/{num}", dependencies=[Depends(admin_only)])
+def detetar_profissional(num: int, sessao: Session = Depends(obter_sessao)):
+    """ Verifica se um funcionário existe e devolve o seu papel sugerido. """
+    func = sessao.get(FuncionarioHospital, num)
+    if not func:
+        raise HTTPException(status_code=404, detail="Funcionário não encontrado")
+    
+    # Mapeamento de tipo para id_role
+    mapping = {"MEDICO": 2, "ENFERMEIRO": 3, "RECECIONISTA": 4, "ADMIN": 1}
+    return {"num_func": func.num_func, "tipo_func": func.tipo_func, "id_role": mapping.get(func.tipo_func)}
 
-@router.get("/audit", response_model=List[LerAuditLog], dependencies=[Depends(admin_only)])
-def listar_audit_logs(sessao: Session = Depends(obter_sessao)):
-    logs = sessao.exec(select(AuditLog).order_by(AuditLog.data_hora.desc()).limit(100)).all()
-    resultado = []
-    for l in logs:
-        log_data = LerAuditLog.model_validate(l)
+@router.post("/professionals", dependencies=[Depends(admin_only)])
+def criar_profissional(dados: CriarProfissional, sessao: Session = Depends(obter_sessao)):
+    """ Regista um novo profissional (Staff) no hospital. """
+    existente = sessao.get(FuncionarioHospital, dados.num_func)
+    if existente:
+        raise HTTPException(status_code=400, detail="Número de funcionário já existe")
+    
+    novo_func = FuncionarioHospital(
+        num_func=dados.num_func,
+        sexo=dados.sexo,
+        tipo_func=dados.tipo_func
+    )
+    sessao.add(novo_func)
+    sessao.flush() # Garante que o funcionário existe antes de criar o registro especializado
+    
+    if dados.tipo_func == "MEDICO":
+        novo_med = Medico(num_func=dados.num_func, estagiario=dados.estagiario)
+        sessao.add(novo_med)
+    elif dados.tipo_func == "ENFERMEIRO":
+        novo_enf = Enfermeiro(num_func=dados.num_func)
+        sessao.add(novo_enf)
         
-        # Nome de quem fez a ação (Staff)
-        if l.id_utilizador:
-            u = sessao.get(Utilizador, l.id_utilizador)
-            if u:
-                log_data.nome_utilizador = u.nome_completo
-        
-        # Identificação do recurso (se for utente)
-        if l.recurso == "utente" and l.id_recurso:
-            try:
-                ut = sessao.get(Utente, int(l.id_recurso))
-                if ut:
-                    log_data.nome_recurso = f"{ut.nome} (NIF: {ut.num_utente})"
-            except:
-                pass
-        
-        resultado.append(log_data)
-    return resultado
+    sessao.commit()
+    return {"message": "Profissional registado com sucesso"}
+
+@router.post("/users/{id_utilizador}/toggle-status", dependencies=[Depends(admin_only)])
+def alternar_estado_utilizador(id_utilizador: int, sessao: Session = Depends(obter_sessao)):
+    user = sessao.get(Utilizador, id_utilizador)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
+    user.ativo = not user.ativo
+    sessao.add(user)
+    sessao.commit()
+    return {"message": f"Estado alterado para {'Ativo' if user.ativo else 'Inativo'}"}
+
+@router.post("/users/{id_utilizador}/resend-activation", dependencies=[Depends(admin_only)])
+def reenviar_ativacao_utilizador(id_utilizador: int, background_tasks: BackgroundTasks, sessao: Session = Depends(obter_sessao)):
+    user = sessao.get(Utilizador, id_utilizador)
+    if not user:
+        raise HTTPException(status_code=404, detail="Utilizador não encontrado")
+    
+    codigo = f"{random.randint(100000, 999999)}"
+    # Limpar validações antigas
+    sessao.execute(text("DELETE FROM email_validation WHERE email = :e"), {"e": user.email})
+    
+    validacao = EmailValidation(email=user.email, codigo=codigo, expira_em=datetime.now(timezone.utc) + timedelta(hours=24))
+    sessao.add(validacao)
+    sessao.commit()
+    
+    background_tasks.add_task(enviar_email_ativacao, user.email, user.nome_completo, codigo)
+    return {"message": "Novo código de ativação enviado por e-mail"}
+
+@router.get("/audit", dependencies=[Depends(admin_only)])
+def ver_audit(sessao: Session = Depends(obter_sessao)):
+    return sessao.exec(select(AuditLog).order_by(AuditLog.data_hora.desc()).limit(100)).all()

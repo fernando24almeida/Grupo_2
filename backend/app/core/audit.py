@@ -1,19 +1,39 @@
-from fastapi import Request
 from sqlmodel import Session
 from ..models.models import AuditLog
-from datetime import datetime, timezone
+from fastapi import Request
+from typing import Optional
 
-def log_audit(db: Session, id_utilizador: int, acao: str, recurso: str, id_recurso: str = None, detalhes: str = None, request: Request = None):
-    ip = request.client.host if request else "unknown"
+# =============================================================================
+# MÓDULO DE AUDITORIA (REGISTO DE AÇÕES)
+# 
+# EXPLICAÇÃO PARA ALUNOS:
+# Este ficheiro serve para escrever no 'livro de registos' do hospital. 
+# Sempre que alguém faz algo importante (como mudar os dados de um utente), 
+# chamamos esta função para guardar quem fez, o quê, quando e de onde (IP).
+# =============================================================================
+
+def log_audit(
+    sessao: Session, 
+    id_utilizador: Optional[int], 
+    acao: str, 
+    recurso: str, 
+    id_recurso: Optional[str] = None, 
+    detalhes: Optional[str] = None,
+    request: Optional[Request] = None
+):
+    """
+    Cria uma nova entrada na tabela audit_log.
+    É como um 'post-it' de segurança que fica guardado para sempre.
+    """
+    ip = request.client.host if request and request.client else None
     
-    novo_log = AuditLog(
+    log = AuditLog(
         id_utilizador=id_utilizador,
         acao=acao,
         recurso=recurso,
         id_recurso=id_recurso,
         detalhes=detalhes,
-        ip_origem=ip,
-        data_hora=datetime.now(timezone.utc)
+        ip_origem=ip
     )
-    db.add(novo_log)
-    db.commit()
+    sessao.add(log)
+    sessao.commit()

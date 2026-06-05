@@ -40,5 +40,6 @@ starlette==0.52.1
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 uvicorn==0.46.0
-pandas==3.0.3
-scikit-learn==1.8.0
+pandas
+scikit-learn
+faker
